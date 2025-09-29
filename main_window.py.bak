@@ -1,0 +1,582 @@
+# gui.py
+from qtpy.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout,QGroupBox,QProgressBar,
+    QPushButton, QLineEdit, QLabel, QFileDialog, QTextEdit,QTableWidget, QTableWidgetItem
+)
+from qtpy.QtGui import QFont
+import html
+import pandas as pd
+from qtpy.QtCore import Qt
+import sys
+###yaml
+import yaml
+from pygments import highlight
+from pygments.lexers import YamlLexer
+from pygments.formatters import HtmlFormatter
+from pygments.styles import get_style_by_name
+
+# 推荐柔和风格：'friendly', 'colorful', 'vs', 'trac'
+STYLE = 'friendly'  # 试试 'vs' 或 'colorful' 看你喜欢哪个
+
+
+from core.engine import BatchProcessor
+from config.loader import load_config, generate_template   #AVAILABLE_PROCESSORS, 
+from processors.processor import ProcessingContext,PROCESSORS,PRE_PROCESSORS,POST_PROCESSORS
+
+from qtpy.QtGui import QTextCharFormat, QSyntaxHighlighter
+
+class YamlHighlighter(QSyntaxHighlighter):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._formats = {}
+
+        # 简单格式
+        keyword_format = QTextCharFormat()
+        keyword_format.setForeground(Qt.blue)
+        keyword_format.setFontWeight(QFont.Bold)
+        self._formats['keyword'] = keyword_format
+
+        string_format = QTextCharFormat()
+        string_format.setForeground(Qt.darkGreen)
+        self._formats['string'] = string_format
+
+    def highlightBlock(self, text):
+        import re
+        # 匹配 key:
+        for match in re.finditer(r'\b\w+(?=:)', text):
+            self.setFormat(match.start(), match.end() - match.start(), self._formats['keyword'])
+        # 匹配字符串
+        for match in re.finditer(r'"[^"]*"', text):
+            self.setFormat(match.start(), match.end() - match.start(), self._formats['string'])
+        for match in re.finditer(r"'[^']*'", text):
+            self.setFormat(match.start(), match.end() - match.start(), self._formats['string'])
+
+
+
+class BatchProcessorGUI(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("批处理系统")
+        self.resize(600, 400)
+        self.config_path = ""
+        self.root_path = ""
+
+        layout = QVBoxLayout()
+
+        # 路径选择
+        self._add_path_row(layout, "配置文件:", self._browse_config, "config_line")
+        self._add_path_row(layout, "目标目录:", self._browse_root, "root_line")
+        self._add_path_row(layout, "插件目录:", self._browse_plugins, "plugins_line")  # 👈 新增
+
+        # 按钮
+        btn_layout = QHBoxLayout()
+        btn_load = QPushButton("加载配置")
+        btn_load.clicked.connect(self._load_config)
+        btn_run = QPushButton("开始处理")
+        btn_run.clicked.connect(self._run)
+        btn_template = QPushButton("生成模板")
+        btn_template.clicked.connect(self._gen_template)
+        btn_plugins = QPushButton("🔌 加载插件")
+        btn_plugins.clicked.connect(self._load_plugins)
+        btn_layout.addWidget(btn_load)
+        btn_layout.addWidget(btn_run)
+        btn_layout.addWidget(btn_template)
+        btn_layout.addWidget(btn_plugins)
+        layout.addLayout(btn_layout)
+        btn_edit_config = QPushButton("📝 编辑配置")
+        btn_edit_config.clicked.connect(self._open_config_editor)
+        btn_layout.addWidget(btn_edit_config)
+        # 在 btn_edit_config 之后添加
+        btn_save = QPushButton("💾 保存配置")
+        btn_save.clicked.connect(self._save_config_file)
+        btn_layout.addWidget(btn_save)
+        # 添加按钮
+        btn_format = QPushButton("✨ 格式化")
+        btn_format.clicked.connect(self._format_config)
+        btn_layout.addWidget(btn_format)
+                
+        # === 插件管理表格 ===
+        layout.addWidget(QLabel("📦 已加载插件:"))
+        
+        self.plugin_table = QTableWidget()
+        self.plugin_table.setColumnCount(7)  # 从 6 改成 7
+        self.plugin_table.setHorizontalHeaderLabels(["文件", "启用", "处理器", "类型", "优先级", "作者", "版本"])
+        self.plugin_table.verticalHeader().setVisible(False)
+        self.plugin_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.plugin_table.cellClicked.connect(self._on_plugin_selected)
+        layout.addWidget(self.plugin_table)
+    
+        # === 插件说明预览 ===
+        layout.addWidget(QLabel("📌 插件说明:"))
+        self.plugin_info = QTextEdit()
+        self.plugin_info.setReadOnly(True)
+        self.plugin_info.setMaximumHeight(120)
+        layout.addWidget(self.plugin_info)
+
+        # === 配置文件显示区域 ============
+        config_group = QGroupBox("配置文件 (config.yaml)")
+        config_layout = QVBoxLayout()
+
+        # 使用 QTextEdit 显示 YAML，支持高亮
+        self.config_textedit = QTextEdit()
+        self.config_textedit.setAcceptRichText(False)  # ❗关键：禁用富文本
+        self.config_textedit.setFont(QFont("Consolas", 10))
+        self.config_textedit.setLineWrapMode(QTextEdit.NoWrap)
+        # 可选：设置等宽字体背景色
+        self.config_textedit.setStyleSheet("QTextEdit { background: #f3f3f3; }")
+        self.highlighter = YamlHighlighter(self.config_textedit.document())    ##语法高亮
+        config_layout.addWidget(self.config_textedit)
+        config_group.setLayout(config_layout)
+        layout.addWidget(config_group)
+
+
+        # 进度条
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("准备中...")
+        layout.addWidget(QLabel("进度:"))
+        layout.addWidget(self.progress_bar)
+
+        # 日志输出
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        layout.addWidget(QLabel("日志:"))
+        layout.addWidget(self.log)
+
+        self.setLayout(layout)
+
+    def _add_path_row(self, parent, label, browse_func, line_attr):
+        row = QHBoxLayout()
+        row.addWidget(QLabel(label))
+        line = QLineEdit()
+        setattr(self, line_attr, line)
+        row.addWidget(line)
+        btn = QPushButton("...")
+        btn.clicked.connect(browse_func)
+        row.addWidget(btn)
+        parent.addLayout(row)
+
+    def _browse_config(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择配置文件", "", "Config Files (*.json *.yaml *.yml)")
+        if path:
+            self.config_line.setText(path)
+            self.config_path = path
+
+    def _browse_root(self):
+        path = QFileDialog.getExistingDirectory(self, "选择目标目录")
+        if path:
+            self.root_line.setText(path)
+            self.root_path = path
+
+    def _browse_plugins(self):
+        path = QFileDialog.getExistingDirectory(self, "选择插件目录")
+        if path:
+            self.plugins_line.setText(path)
+
+    def _load_config(self):
+        if not self.config_path:
+            self.config_path = self.config_line.text().strip()
+        if not self.config_path:
+            self._log("请先选择配置文件")
+            return
+    
+        try:
+            self.config = load_config(self.config_path)
+    
+            # 把 config 转回格式化的 YAML 字符串
+            yaml_str = yaml.dump(
+                self.config,
+                default_flow_style=False,
+                allow_unicode=True,
+                indent=2,
+                sort_keys=False  # 保持原始顺序
+            )
+    
+            # 使用 Pygments 高亮
+#            html_code = highlight(
+#                yaml_str,
+#                YamlLexer(),
+#                HtmlFormatter(style=STYLE)
+#            )
+#    
+#            # 获取 CSS 样式 + 高亮代码
+#            css = HtmlFormatter(style=STYLE).get_style_defs('.highlight')
+#            full_html = f"<style>{css}</style><div class='highlight'><pre>{html_code}</pre></div>"
+#    
+#            # 设置为富文本
+#            self.config_textedit.setHtml(full_html)
+            
+            self.config_textedit.setPlainText(yaml_str)  # ✅ 纯文本
+    
+            self._log(f"✅ 配置加载成功: {list(self.config.keys())}")
+        except Exception as e:
+            self._log(f"❌ 加载失败: {e}")
+   #
+   #格式化
+    def _format_config(self):
+        yaml_text = self.config_textedit.toPlainText().strip()
+        if not yaml_text:
+            return
+    
+        try:
+            data = yaml.safe_load(yaml_text)
+            formatted = yaml.dump(
+                data,
+                default_flow_style=False,
+                allow_unicode=True,
+                indent=2,
+                sort_keys=False
+            )
+            self.config_textedit.setPlainText(formatted)
+            self._log("✅ 配置已格式化")
+        except yaml.YAMLError as e:
+            self._log(f"❌ 无法格式化，语法错误: 第 {e.problem_mark.line + 1} 行")
+
+    ##保存编辑完成的配置文件
+    def _save_config_file(self):
+        if not self.config_path:
+            self.config_path = self.config_line.text().strip()
+        if not self.config_path:
+            self._log("❌ 请先加载或选择配置文件")
+            return
+    
+        # 获取文本内容
+        yaml_text = self.config_textedit.toPlainText().strip()
+        if not yaml_text:
+            self._log("❌ 配置内容为空")
+            return
+    
+        try:
+            # ✅ 1. 解析 YAML，验证语法
+            new_config = yaml.safe_load(yaml_text)
+            if not isinstance(new_config, dict):
+                raise ValueError("配置必须是一个对象")
+    
+            # ✅ 2. 写入文件
+            with open(self.config_path, 'w', encoding='utf-8') as f:
+                f.write(yaml_text)
+    
+            # ✅ 3. 更新内存中的 config
+            self.config = new_config
+    
+            self._log(f"✅ 配置已保存: {self.config_path}")
+            self._log(f"🔄 已重新加载配置")
+    
+        except yaml.YAMLError as e:
+            self._log(f"❌ YAML 语法错误: 第 {e.problem_mark.line + 1} 行")
+            self._log(f"   {e.problem}")
+        except Exception as e:
+            self._log(f"❌ 保存失败: {e}")
+
+
+    def _run(self):
+        if not hasattr(self, 'config'):
+            self._load_config()
+        if not hasattr(self, 'config'):
+            return
+        if not self.root_path:
+            self.root_path = self.root_line.text().strip()
+        if not self.root_path:
+            self._log("请指定目标目录")
+            return
+
+        try:
+            processor = BatchProcessor(self.config)   #, AVAILABLE_PROCESSORS
+           # 设置进度回调
+            def progress_callback(current, total, status="处理中"):
+                self.progress_bar.setMaximum(total)
+                self.progress_bar.setValue(current)
+                self.progress_bar.setFormat(f"{status} [{current}/{total}]")
+    
+            processor.set_progress_callback(progress_callback)
+    
+            # 重定向日志
+            import sys
+            from io import StringIO
+            old_stdout = sys.stdout
+            sys.stdout = captured_output = StringIO()
+    
+            processor.run(self.root_path)
+    
+            sys.stdout = old_stdout
+            self._log(captured_output.getvalue())
+            self.progress_bar.setFormat("完成")
+            self._show_results(processor.context.results)  # 显示结果
+        except Exception as e:
+            self._log(f"❌ 运行失败: {e}")
+        
+        self._show_results(processor.context.results)
+
+    def _gen_template(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存模板", "config.yaml", "YAML (*.yaml);;JSON (*.json)"
+        )
+        if path:
+            generate_template(path)
+            self._log(f"✅ 模板已生成: {path}")
+
+    def _log(self, text: str):
+        self.log.append(text.replace('\n', '<br>'))
+
+     ##打开配置文件
+    def _open_config_editor(self):
+        """打开图形化配置编辑器"""
+        from qtpy.QtWidgets import QDialog, QFormLayout, QLineEdit, QDialogButtonBox
+    
+        dialog = QDialog(self)
+        dialog.setWindowTitle("编辑配置")
+        dialog.resize(400, 300)
+    
+        layout = QFormLayout()
+    
+        config = getattr(self, 'config', {})
+    
+        self.config_fields = {}
+    
+        for key in ['pre_process', 'post_process', 'processor']:
+            line = QLineEdit(config.get(key, ""))
+            self.config_fields[key] = line
+            layout.addRow(key, line)
+    
+        # 包含 filters 等复杂字段可扩展为子对话框
+    
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(lambda: self._save_config_from_editor(dialog))
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+    
+        dialog.setLayout(layout)
+        dialog.exec_()
+    
+    def _save_config_from_editor(self, dialog):
+        new_config = {}
+        for key, line in self.config_fields.items():
+            value = line.text().strip()
+            if value:
+                new_config[key] = value
+            else:
+                new_config[key] = None  # 或跳过
+    
+        self.config = new_config
+        self.config_textedit.setPlainText(str(new_config))
+        self._log("✅ 配置已更新")
+        dialog.accept()
+
+
+    def _show_results(self, results: list):
+        """将结果列表转为表格展示"""
+        if not results:
+            return
+    
+        df = pd.DataFrame(results)
+        df = df.fillna("")
+    
+        # 清除旧表格（可选）
+        if hasattr(self, 'results_table'):
+            self.layout().removeWidget(self.results_table)
+            self.results_table.deleteLater()
+    
+        # 创建新表格
+        self.results_table = QTableWidget()
+        self.results_table.setRowCount(len(df))
+        self.results_table.setColumnCount(len(df.columns))
+        self.results_table.setHorizontalHeaderLabels(df.columns)
+        self.results_table.verticalHeader().setVisible(False)
+    
+        for i, row in df.iterrows():
+            for j, val in enumerate(row):
+                self.results_table.setItem(i, j, QTableWidgetItem(str(val)))
+    
+        # 添加到布局
+        self.layout().addWidget(QLabel("📊 处理结果:"))
+        self.layout().addWidget(self.results_table)
+
+
+
+    def _show_dataframe(self, df: pd.DataFrame):
+        self.table = QTableWidget()
+        self.table.setRowCount(len(df))
+        self.table.setColumnCount(len(df.columns))
+        self.table.setHorizontalHeaderLabels(df.columns)
+        
+        for i, row in df.iterrows():
+            for j, val in enumerate(row):
+                self.table.setItem(i, j, QTableWidgetItem(str(val)))
+        
+        self.layout.addWidget(self.table)
+
+    def _load_plugins(self):
+        from pathlib import Path
+        from importlib.util import spec_from_file_location, module_from_spec
+        import sys
+    
+        plugin_path = self.plugins_line.text().strip()
+        if not plugin_path:
+            self._log("⚠️ 请先选择插件目录")
+            return
+    
+        plugin_dir = Path(plugin_path)
+        if not plugin_dir.exists():
+            self._log(f"❌ 插件目录不存在: {plugin_dir}")
+            return
+        if not plugin_dir.is_dir():
+            self._log(f"❌ 不是有效目录: {plugin_dir}")
+            return
+    
+        self._log(f"🔍 扫描插件目录: <b>{plugin_dir.resolve()}</b>")
+    
+        # 清空旧表
+        self.plugin_table.setRowCount(0)
+        self.plugin_table.clearContents()
+    
+        loaded = 0
+        failed = 0
+    
+        # 存储插件信息（可选）
+        self.loaded_plugins = {}
+    
+        for pyfile in plugin_dir.glob("*.py"):
+            if pyfile.name == "__init__.py":
+                continue
+    
+            try:
+                module_name = f"plugin_ext_{pyfile.stem}"
+                spec = spec_from_file_location(module_name, pyfile)
+                module = module_from_spec(spec)
+                sys.modules[module_name] = module
+                spec.loader.exec_module(module)
+    
+                # 扫描模块中所有带 .processor_name 的函数
+                plugin_funcs = []
+                for attr_name in dir(module):
+                    attr = getattr(module, attr_name)
+                    if callable(attr) and hasattr(attr, 'processor_name'):
+                        
+                        handler_name = attr.processor_name    ##函数名
+                        plugin_funcs.append(attr)
+                if not plugin_funcs:
+                    self._log(f"🟡 {pyfile.name}：未发现处理器")
+                    continue
+    
+                # ✅ 关键：将每个函数注册到 AVAILABLE_PROCESSORS
+                for func in plugin_funcs:
+                    handler_name = func.processor_name
+                   # ✅ 统一注册到 AVAILABLE_PROCESSORS（供配置查找）
+                    AVAILABLE_PROCESSORS[handler_name] = attr
+                 
+                    # ✅ 同时按种类放入专用注册表（可选，更清晰）
+                    kind = getattr(func, 'processor_kind', 'file')  # 默认为 file
+                    if kind == "pre":
+                        PRE_PROCESSORS[handler_name] = attr
+                    elif kind == "post":
+                        POST_PROCESSORS[handler_name] = attr
+                    else:
+                        PROCESSORS[handler_name] = attr  # file/dir 类型                    
+                    
+                    self._log(f"🔧 注册处理器: {handler_name} <- {pyfile.name}")
+    
+                # 记录已加载插件（用于 UI 管理）
+                self.loaded_plugins[pyfile.name] = {
+                    'module': module,
+                    'functions': plugin_funcs
+                }
+    
+                # 添加到表格
+                for func in plugin_funcs:
+                    row = self.plugin_table.rowCount()
+                    self.plugin_table.insertRow(row)
+    
+                    # 文件名
+                    self.plugin_table.setItem(row, 0, QTableWidgetItem(pyfile.name))
+    
+                    # 启用复选框
+                    cb = QTableWidgetItem()
+                    cb.setCheckState(Qt.Checked)
+                    cb.plugin_func = func  # 绑定函数对象
+                    self.plugin_table.setItem(row, 1, cb)
+    
+                    # 处理器名
+                    self.plugin_table.setItem(row, 2, QTableWidgetItem(func.processor_name))
+
+                   # 🔔 类型（新增）
+                    ptype = getattr(func, 'processor_type', 'file')
+                    type_item = QTableWidgetItem(ptype.upper())
+                    if ptype == "pre":
+                        type_item.setForeground(Qt.blue)
+                    elif ptype == "post":
+                        type_item.setForeground(Qt.magenta)
+                    else:
+                        type_item.setForeground(Qt.darkGreen)
+                    self.plugin_table.setItem(row, 3, type_item)
+
+                    # 在 _load_plugins() 中，插入表格的循环里
+                    priority = getattr(func, 'processor_priority', 50)  # 默认优先级 50
+                    priority_item = QTableWidgetItem(str(priority))
+                    priority_item.setTextAlignment(Qt.AlignCenter)
+                    self.plugin_table.setItem(row, 4, priority_item)  # 注意：列索引变了！
+
+                    # 元数据
+                    meta = getattr(func, 'metadata', {})
+                    self.plugin_table.setItem(row, 5, QTableWidgetItem(meta.get("author", "未知")))
+                    self.plugin_table.setItem(row, 6, QTableWidgetItem(meta.get("version", "-")))
+    
+                self._log(f"✅ 成功加载插件: <b>{pyfile.name}</b> ({len(plugin_funcs)} 个处理器)")
+                loaded += 1
+    
+            except Exception as e:
+                self._log(f"❌ 加载失败 {pyfile.name}: <span style='color:red;'>{e}</span>")
+                failed += 1
+    
+        # ✅ 最后打印 PROCESSORS 内容用于调试
+        self._log(f"📊 插件加载完成: <b>{loaded}</b> 成功, <b>{failed}</b> 失败")
+        self._log(f"🔄 可用处理器: {list(PROCESSORS.keys())}")
+    
+        # 🔍 调试：打印类型
+        print("\n🔍 PROCESSORS 调试:")
+        for k, v in PROCESSORS.items():
+            print(f"  {k} -> type={type(v).__name__}, callable={callable(v)}")
+    
+    def _on_plugin_selected(self, row, col):
+        cb_item = self.plugin_table.item(row, 1)
+        if not hasattr(cb_item, 'plugin_func'):
+            return
+    
+        func = cb_item.plugin_func
+        meta = getattr(func, 'metadata', {})
+    
+        def safe_str(value, default=""):
+            return html.escape(str(value)) if value is not None else default
+    
+        name = safe_str(meta.get('name'), func.processor_name)
+        processor_name = safe_str(func.processor_name)
+        author = safe_str(meta.get('author'), "未知")
+        version = safe_str(meta.get('version'), "N/A")
+        description = safe_str(meta.get('description'), "无")
+        supported_types = ", ".join(meta.get('supported_types', [])) or "无"
+        tags = ", ".join(meta.get('tags', [])) or "无"
+        priority = getattr(func, 'processor_priority', 50)
+        ptype = getattr(func, 'processor_type', 'file').upper()
+    
+        # 🔔 加入类型
+        doc = (
+            f"<b>名称:</b> {name}<br>\n"
+            f"<b>处理器:</b> {processor_name}<br>\n"
+            f"<b>类型:</b> <span style='color: {'blue' if ptype=='PRE' else 'magenta' if ptype=='POST' else 'green'};'>{ptype}</span><br>\n"
+            f"<b>优先级:</b> <b>{priority}</b><br>\n"  # 👈 新增
+            f"<b>作者:</b> {author}<br>\n"
+            f"<b>版本:</b> {version}<br>\n"
+            f"<b>描述:</b> {description}<br>\n"
+            f"<b>支持类型:</b> {safe_str(supported_types)}<br>\n"
+            f"<b>标签:</b> {safe_str(tags)}"
+        )
+    
+        self.plugin_info.setHtml(doc)
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = BatchProcessorGUI()
+    window.show()
+    sys.exit(app.exec())

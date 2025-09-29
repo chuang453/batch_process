@@ -1,0 +1,33 @@
+pre_process: init
+config_pre:
+  out_doc: ./test.doc
+post_process: post
+
+'*/':
+  processors:
+    - write_path_to_word
+    - origin_cd
+  config:
+    style: 'ZHZ 3级'
+  priority: 5
+  
+'*/*.out':
+  processors:
+    - get_load_data
+    - process_load_data
+    - write_load_to_word
+    - write_load_to_origin
+    - add_load_to_dataframe
+  config:
+    style_case: 'ZHZ 4级'
+    style_part: 'ZHZ 5级'
+    style_text: 'ZHZ正文'
+  priority: 5
+
+'**/':
+  processors:
+    - set_path_name_dict
+  config:
+    _dict_file: '_dict.txt'
+  priority: 10
+  must_excute: true

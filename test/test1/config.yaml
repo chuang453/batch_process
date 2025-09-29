@@ -1,0 +1,19 @@
+pre_process: setup_env
+config_pre:
+  path: ./backup
+post_process: generate_report
+'*.txt':
+  processors:
+  - backup_file
+  - add_prefix
+  config:
+    prefix: '[文本]'
+    backup_dir: ./backup
+  priority: 10
+  must_excute: yes
+'*':
+  processors:
+  - backup_file
+  config:
+    backup_dir: ./backup
+  priority: 1

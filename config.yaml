@@ -1,0 +1,11 @@
+# config.yaml
+pre_process: setup_env           # 初始化函数名   只执行一次
+post_process: generate_report    # 最终处理函数名  只执行一次
+
+# 原有规则保持不变
+"*.txt":
+  - add_prefix
+  - backup_file
+
+"data/":
+  - compress_files

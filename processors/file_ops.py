@@ -1,0 +1,225 @@
+'''
+处理文件或文件夹的一些处理函数
+
+使用context.data数据，此文件中的所有函数使用context.data['file_ops']字典写入数据
+
+'''
+import re
+from pathlib import Path
+import shutil
+from typing import Dict, Any
+from core.engine import ProcessingContext
+from decorators.processor import processor
+SCRIPT_DIR = Path(__file__).parent.resolve()   ##此脚本的路径
+
+@processor(name="backup_file", priority=60, source = SCRIPT_DIR, metadata={
+    "name": "备份",
+    "author": "guancc",
+    "version": "1.0",
+    "description": "备份文件到指定目录",
+    "supported_types": [""],
+    "tags": [""]
+})
+def backup_file(file_path: Path, context, **kwargs):  #, backup_dir: str = "/backup"
+    """
+    备份文件到指定目录
+    """
+    root_dir = context.root_path or '.'
+    backup_dir = kwargs.get("backup_dir", "./backup")    ##相对路径
+    
+    if not file_path.is_file():
+        return {f"skipped: {file_path} is not a file"}
+
+    backup_root = Path(backup_dir)
+    # 保持目录结构
+    rel_path = file_path.relative_to(root_dir)
+    backup_path = backup_root / rel_path
+
+    try:
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(file_path, backup_path)
+        print(f"  📦 备份: {file_path} → {backup_path}")
+        return {
+            "action": "backup",
+            "from": str(file_path),
+            "to": str(backup_path)
+        }
+    except Exception as e:
+        print(f"  ❌ 备份失败 {file_path}: {e}")
+        return {
+            "error": str(e),
+            "path": str(file_path)
+        }
+
+
+@processor(name="backup_file1", priority=60, source = SCRIPT_DIR, metadata={
+    "name": "备份文件",
+    "author": "guancc",
+    "version": "1.0",
+    "description": "备份文件到 .bak,data['file_ops']['renamed']中存储备份的文件列表",
+    "supported_types": [""],
+    "tags": [""]
+})
+#@processor("backup_file1")
+def backup_file1(file: Path, context: ProcessingContext, **kwargs) -> Dict[str, Any]:
+    """备份文件到 .bak"""
+    backup_path = file.with_suffix(file.suffix + ".bak")
+    try:
+        shutil.copy2(file, backup_path)
+        # 全局共享备份列表
+#        context.shared.setdefault("backups", []).append(str(backup_path))
+        file_op_data = context.data.setdefault("file_ops", {})  ##file_op的数据
+        file_op_data.setdefault("backups", []).append(str(backup_path))
+        return {
+            "file": str(file),
+            "backup": str(backup_path),
+            "processor": "backup_file",
+            "status": "success"
+        }
+    except Exception as e:
+        return {
+            "file": str(file),
+            "processor": "backup_file",
+            "status": "error",
+            "error": str(e)
+        }
+
+
+
+@processor(name="rename_file", priority=60, source = SCRIPT_DIR, metadata={
+    "name": "重命名",
+    "author": "guancc",
+    "version": "1.0",
+    "description": "重命名文件, data['file_ops']['renamed']中存储修改信息列表",
+    "supported_types": [""],
+    "tags": [""]
+})
+#@processor("rename_file")
+def rename_file(file: Path, context: ProcessingContext, **kwargs) -> Dict[str, Any]:
+    """重命名文件（示例：添加前缀）"""
+    new_name = file.parent / f"processed_{file.name}"
+    try:
+        file.rename(new_name)
+   #     context.shared.setdefault("renamed", []).append({
+   #         "from": str(file),
+    #        "to": str(new_name)
+    #    })
+        file_op_data = context.data.setdefault("file_ops", {})  ##file_op的数据
+        file_op_data.setdefault("renamed", []).append({
+            "from": str(file),
+            "to": str(new_name)
+        })
+        return {
+            "file": str(file),
+            "new_name": str(new_name),
+            "processor": "rename_file",
+            "status": "success"
+        }
+    except Exception as e:
+        return {
+            "file": str(file),
+            "processor": "rename_file",
+            "status": "error",
+            "error": str(e)
+        }
+
+@processor(name="delete_file", priority=60, source = SCRIPT_DIR, metadata={
+    "name": "删除文件",
+    "author": "guancc",
+    "version": "1.0",
+    "description": "删除文件, data['file_ops']['deleted']中存储删除的文件名",
+    "supported_types": [""],
+    "tags": [""]
+})
+def delete_file(file: Path, context: ProcessingContext, **kwargs) -> Dict[str, Any]:
+    """删除文件（谨慎使用）"""
+    try:
+        file.unlink()
+    #    context.shared.setdefault("deleted", []).append(str(file))
+        file_op_data = context.data.setdefault("file_ops", {})  ##file_op的数据
+        file_op_data.setdefault("deleted", []).append(str(file))
+        return {
+            "file": str(file),
+            "processor": "delete_file",
+            "status": "deleted"
+        }
+    except Exception as e:
+        return {
+            "file": str(file),
+            "processor": "delete_file",
+            "status": "error",
+            "error": str(e)
+        }
+    
+
+
+## 为所有文件夹或文件名对应一个新名称。由字典_dict给定{路径名: 新名称}，并在context.data['labels']中为其内各文件夹和文件的添加别名
+##     context.data['labels'][path] 对应path的别名， 是一个列表 [name1, name2,...] ，namei对应其各父级path的别名
+## 这个_dict由文件夹内的文件_dict.txt(默认名)指定。_dict.txt可用参数字典config['_dict_file']指定
+## _dict.txt内有2列数据，第一列为键、第二列为值。键和值之间可由任何空格、制表位、逗号隔开
+##  若要在其它处理函数中引用这个字典，可用data["file_ops"]["path_name_dict"][str(path)] 存储文件夹path内所有文件的对应字典
+## 
+@processor(name="set_path_name_dict", priority=60, source = SCRIPT_DIR, metadata={
+    "name": "set_path_name_dict",
+    "author": "guancc",
+    "version": "1.0",
+    "description": "从文件夹下读取此文件夹下所有文件的名称字典",
+    "supported_types": [""],
+    "tags": [""]
+})
+def set_path_name_dict(path: Path, context: ProcessingContext, **kwargs):
+
+    if not path.is_dir():    ##非文件夹，跳过
+        return
+
+    all_dict = context.setdefault_data([ "file_ops", "path_name_dict", str(path)], {})
+    _dict_file = kwargs.get('_dict_file', '_dict.txt')   ##字典文件名
+    dict_file = path / _dict_file
+    
+    ##文件存在，则读取
+    if dict_file.is_file() and not all_dict:    ## all_dict为空字典时
+        separator_pattern = r'\s*,\s*|\s+'
+        config = {}
+        with open(dict_file, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                
+                # 跳过空行和注释
+                if not line or line.startswith('#'):
+                    continue
+                
+                # 使用正则分割，最多分割成两部分（防止值中包含分隔符）
+                parts = re.split(separator_pattern, line, maxsplit=1)
+                
+                if len(parts) < 2:
+                    print(f"⚠️  第 {line_num} 行格式错误（缺少值）: {line}")
+                    continue
+                
+                key, value = parts[0].strip(), parts[1].strip()
+                if not key:
+                    print(f"⚠️  第 {line_num} 行键为空: {line}")
+                    continue
+                
+                config[key] = value
+        all_dict.update(config)
+
+    ##为其内文件添加别名
+    path_label = context.get_data(['labels', str(path)], [])
+    for pathi in path.iterdir():      
+        context.set_data(['labels', str(pathi)],  path_label + [all_dict.get( pathi.name, pathi.name )]  )
+
+   ##文件夹的category名
+    
+    path_cate = context.get_data( ['categories', str(path)], [] )
+    _suffix = kwargs.get('category_suffix', '.cate')
+    cate_name = [pathi.stem for pathi in path.glob('*'+ _suffix)]
+    if cate_name:
+        for pathi in path.iterdir():
+            context.set_data(['categories', str(pathi)], path_cate + [cate_name[0]]  )
+    
+    return {
+            "file": str(path),
+            "processor": "set_path_name_dict",
+            "status": "success"
+          }
+
