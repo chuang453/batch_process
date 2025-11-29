@@ -133,6 +133,39 @@ class ProcessingContext:
     def setdefault_shared(self, keys: Any, default = None):
         return setdefault_dict_data(self.shared, keys, default)
 
+    # 扩展：删除共享命名空间或具体键
+    def delete_shared(self, keys: Any):
+        if not isinstance(keys, list):
+            self.shared.pop(keys, None)
+            return
+        # 逐级定位父字典
+        if len(keys) == 0:
+            return
+        parent = self.shared
+        for k in keys[:-1]:
+            if not isinstance(parent, dict) or k not in parent:
+                return
+            parent = parent.get(k)
+        if isinstance(parent, dict):
+            parent.pop(keys[-1], None)
+
+    # 扩展：列出某命名空间下所有键（返回扁平路径列表）
+    def list_shared_namespace(self, prefix: List[str] = None) -> List[List[str]]:
+        ns = self.shared
+        if prefix:
+            ns = get_dict_data(self.shared, prefix, {})
+        paths: List[List[str]] = []
+
+        def walk(node, base: List[str]):
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    walk(v, base + [str(k)])
+            else:
+                paths.append(base)
+
+        walk(ns, prefix or [])
+        return paths
+
 
 
 # 全局处理器注册表

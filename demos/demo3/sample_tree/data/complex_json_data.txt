@@ -1,0 +1,5 @@
+[
+  {"id": 1, "name": "foo", "metrics": {"a": 10, "b": 20}},
+  {"id": 2, "name": "bar", "metrics": {"a": 15, "b": 25}},
+  {"id": 3, "name": "baz", "metrics": {"a": 12, "b": 22}}
+]

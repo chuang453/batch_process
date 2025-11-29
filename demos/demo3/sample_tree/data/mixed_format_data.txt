@@ -1,0 +1,6 @@
+# Mixed format: CSV, JSON, and plain text
+CSV: name,score
+John,88
+Jane,92
+JSON: {"team": "Alpha", "members": ["John", "Jane"]}
+Plain: This is a summary line.

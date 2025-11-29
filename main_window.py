@@ -212,6 +212,12 @@ class BatchProcessorGUI(QWidget):
         self.plugin_table.verticalHeader().setVisible(False)
         self.plugin_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.plugin_table.cellClicked.connect(self._on_plugin_selected)
+        # 启用列头点击排序（升降序切换）
+        self.plugin_table.setSortingEnabled(True)
+        self._plugin_sort_order = Qt.AscendingOrder
+        header = self.plugin_table.horizontalHeader()
+        header.setSectionsClickable(True)
+        header.sectionClicked.connect(self._on_plugin_header_clicked)
         table_layout.addWidget(self.plugin_table)
         plugin_table_group.setLayout(table_layout)
 
@@ -930,6 +936,24 @@ class BatchProcessorGUI(QWidget):
                 row, 5, QTableWidgetItem(meta.get("author", "未知")))
             self.plugin_table.setItem(
                 row, 6, QTableWidgetItem(meta.get("version", "-")))
+
+        # 重新应用当前排序（如果用户之前点击过列头）
+        try:
+            header = self.plugin_table.horizontalHeader()
+            current_col = header.sortIndicatorSection()
+            current_order = header.sortIndicatorOrder()
+            self.plugin_table.sortItems(current_col, current_order)
+        except Exception:
+            pass
+
+    def _on_plugin_header_clicked(self, logicalIndex: int):
+        """点击插件表头时切换升/降序并按列排序。"""
+        header = self.plugin_table.horizontalHeader()
+        # 切换排序方向
+        current_order = header.sortIndicatorOrder()
+        new_order = Qt.DescendingOrder if current_order == Qt.AscendingOrder else Qt.AscendingOrder
+        header.setSortIndicator(logicalIndex, new_order)
+        self.plugin_table.sortItems(logicalIndex, new_order)
 
 
     def _on_plugin_selected(self, row, col):

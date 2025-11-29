@@ -1,0 +1,6 @@
+experiment_id,subject,score,time,passed,notes
+EXP001,Alice,87,12.5,True,Good response
+EXP002,Bob,92,11.8,True,Excellent
+EXP003,Charlie,76,14.2,False,Needs review
+EXP004,Diana,88,13.0,True,Consistent
+EXP005,Eve,95,10.9,True,Outstanding

@@ -1,0 +1,22 @@
+".":
+  pre_processors:
+    - enter_dir_write_word
+  config:
+    doc_path: demos/output.docx
+
+"**/":
+  pre_processors:
+    - enter_dir_write_word
+  post_processors:
+    - plot_on_exit_paste_word
+  config:
+    doc_path: demos/output.docx
+    img_dir: demos/images
+    force_pillow: true   # 若仍闪退，先强制 Pillow
+
+"**/*.txt":
+  pre_processors:
+    - read_data_files
+  config:
+    pattern: "*.txt"
+    key: values

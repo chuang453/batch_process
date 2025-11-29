@@ -1,0 +1,11 @@
+# Nested folder processing demo config
+# 目录模式以 / 结尾匹配目录本身；文件模式匹配文件。
+"**/":
+  pre_processors: ["enter_folder_word"]
+  post_processors: ["folder_summary"]
+"**/*.csv":
+  processors: ["process_data_file"]
+"**/*.txt":
+  processors: ["process_data_file"]
+"**/*.json":
+  processors: ["process_data_file"]
