@@ -1,0 +1,13 @@
+"**/*.txt":
+  processors:
+    - backup_file
+  config:
+    backup_dir: demo/backups
+
+"**/rename_me/*.txt":
+  processors:
+    - rename_file
+
+".":
+  pre_processors:
+    - set_path_name_dict

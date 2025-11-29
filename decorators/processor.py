@@ -90,6 +90,12 @@ class ProcessingContext:
     metadata: Dict[str, Any] = field(default_factory=dict)  # 元信息
     shared: Dict[str, Any] = field(default_factory=dict)    # 全局共享数据
 
+    def clear(self):
+        self.data.clear()
+        self.results.clear()
+        self.metadata.clear()
+        self.shared.clear()
+
     def set_data(self, keys: Any, value: Any):
         set_dict_data(self.data, keys, value)
 

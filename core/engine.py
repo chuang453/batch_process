@@ -1,39 +1,24 @@
-# core.py (升级版)
-from pathlib import Path
-from typing import Callable, Any, Dict, List, Union
-import fnmatch
-#from dataclasses import dataclass, field
-from typing import Generator
-import traceback
-from decorators.processor import ProcessingContext,PROCESSORS,PRE_PROCESSORS,POST_PROCESSORS
-from utils.utils import preorder_tree_paths
-Processor = Callable[[Path, ProcessingContext], Any]
-'''
-#批处理器
-# 对目录中的文件或文件夹递归地应用处理函数。
-# 基本配置一般用yaml文件写
-类型	 写法示例	匹配对象	      说明
-🔤 精确文件名	"readme.txt"	文件 readme.txt	区分大小写
-📁 目录名（推荐）	"data/"	名为 data 的目录	必须以 / 结尾
-🧩 通配符文件	"*.log"	所有 .log 文件	使用 fnmatch 语法
-🔁 递归匹配	"**/*.tmp"	所有层级的 .tmp 文件	** 表示任意层级
-📂 子目录专用规则	"logs/": { ... }	logs/ 目录下的内容	嵌套配置块
+# core.py - BatchProcessor with pre/post per-path and accurate progress
 
-'''
+from pathlib import Path
+import fnmatch
+from wcmatch import glob
+import traceback
+from typing import Dict, List, Tuple, Any, Optional
+from decorators.processor import ProcessingContext, PROCESSORS, PRE_PROCESSORS, POST_PROCESSORS
 
 
 class BatchProcessor:
-    def __init__(self, config: Dict = None):  #, processors: Dict[str, Processor]
+
+    def __init__(self, config: Dict = None):
         self.config = config or {}
-        #    self.processors = processors
-        self.root_path = None
-        self.context = None
-
-        # 提取 pre/post 函数名（从配置中）
-  #      self.pre_func_name = self.config.get("pre_process")
-   #     self.post_func_name = self.config.get("post_process")
-
-        self.progress_callback = None  ##进度条回调
+        self.root_path: Optional[Path] = None
+        self.progress_callback = None
+        self.worker = None
+        # 默认使用全局注册表
+        self._pre_processors = PRE_PROCESSORS
+        self._processors = PROCESSORS
+        self._post_processors = POST_PROCESSORS
 
     def set_config(self, config: Dict):
         self.config = config
@@ -41,7 +26,7 @@ class BatchProcessor:
     def set_progress_callback(self, callback):
         self.progress_callback = callback
 
-    def _call_progress(self, current, total, status):
+    def _call_progress(self, current: int, total: int, status: str):
         if self.progress_callback:
             self.progress_callback(current, total, status)
 
@@ -49,236 +34,284 @@ class BatchProcessor:
         self.worker = worker
 
     def _is_cancelled(self) -> bool:
-        """检查是否被请求取消"""
         if self.worker and self.worker.thread():
             return self.worker.thread().isInterruptionRequested()
         return False
 
+    def set_processors(self, pre=None, main=None, post=None):
+        """允许外部覆盖处理器集合"""
+        if pre is not None:
+            self._pre_processors = pre
+        if main is not None:
+            self._processors = main
+        if post is not None:
+            self._post_processors = post
 
-
-    def run(self, root_path: str | Path, context = None) -> ProcessingContext:
-       
-     #   self.context = ProcessingContext()
-      #  context = self.context
+    # ==================== PUBLIC API ====================
+    def run(self,
+            root_path: str | Path,
+            context: ProcessingContext = None) -> ProcessingContext:
         context = context or ProcessingContext()
         root = Path(root_path)
-        context.root_path = root  
-
         if not root.exists():
             raise FileNotFoundError(f"路径不存在: {root}")
-   #     context.set_data('root', root)
-        self.root_path = root          ##绝对路径
+
+        context.root_path = root
+        self.root_path = root
         print(f"🔍 开始处理: {root}")
 
-        ##收集所有待处理的文件或目录
-        # 📂 收集所有 **文件和目录**
-    #    all_items = [root] + [p for p in root.rglob("*")]  # 包含 root 自身
-        all_items = [root] + preorder_tree_paths(root)  #[p for p in root.rglob("*")]  # 包含 root 自身
-        total_items = len(all_items)
+        # 获取全局钩子
+        global_pre_name, config_pre = self._get_pre_config()
+        global_post_name, config_post = self._get_post_config()
 
+        # 精确统计总步数
+        total_processor_calls = self._count_total_processor_calls(root)
+        total_steps = ((1 if global_pre_name else 0) + total_processor_calls +
+                       (1 if global_post_name else 0))
+        print(f"📊 总操作数: {total_steps}")
 
-        ##前后处理函数
-        pre_func_name, config_pre = self._get_pre_config()          
-        post_func_name, config_post = self._get_post_config()
+        current_step = 0
 
-        # 🔹 1. 执行初始化函数（如果存在）
-        # 统计总操作数
-      
-        total_steps = (1 if pre_func_name else 0) + sum(
-            len(self._get_processors_for_file(p, p.is_dir()))
-            for p in all_items) + (1 if post_func_name else 0)
-        current_step = 0        
-        if pre_func_name:
-            print('🚀  开始执行初始化...（{pre_func_name}）')
-            if self._is_cancelled():    #取消执行的检查
-                return context
-
+        # === 全局 pre_process ===
+        if global_pre_name:
             current_step += 1
             self._call_progress(current_step, total_steps,
-                                f"🚀 初始化: {pre_func_name}")
-            try:
-                if pre_func_name in PRE_PROCESSORS:
-                    result = PRE_PROCESSORS[pre_func_name](context, **config_pre)
-                    context.add_result({"phase": "pre", "result": result})
-                    print('✅ 初始化完成!')
-                else:
-                    print(f"⚠️ 未注册的初始化函数: {pre_func_name}")
-        #           self._call_progress(current_step, total_steps, f"⚠️ 跳过初始化: {pre_func_name}")
-            except Exception as e:
-                print(f"❌ 初始化失败: {e}\n{traceback.format_exc()}")
+                                f"🚀 全局初始化: {global_pre_name}")
+            print(f'🚀 执行全局初始化...（{global_pre_name}）')
+            if self._is_cancelled():
                 return context
-        else:
-            print(f"⚠️ 未定义初始化函数，跳过")
-
-        # 🔹 2. 遍历所有项（文件 + 目录）
-        ii = 0
-        for item in all_items:      ##所有待处理项,根目录下所有文件， 绝对路径
-
-            if self._is_cancelled():  # ✅ 每个文件前检查, 执行检查
-                self._log("🛑 用户取消，停止处理")
-                break        
-
-            is_dir = item.is_dir()
-
-            processors_and_configs = self._get_processors_for_file(
-                item, is_dir)
-
-           ## 记录此路径的metadata，一个列表：[处理函数，处理参数，执行情况, 执行排序，警告信息， 错误信息]
-         
-            rel_path = item.relative_to(root)    ##相对路径
-            parts = list(rel_path.parts)
-            parts1 = [ai + '/' for ai in parts[:-1]] + [ parts[-1] ] if len(parts) > 0 else ['.']   #键
-            metadata_info = [[], [], [], None,[],[]]
-            context.set_metadata(parts1, metadata_info)
-            
-            if not processors_and_configs:
-                continue  # 无匹配规则     
-                
-            ii += 1   ##计数器
-            metadata_info[3] = ii
-
-            for processor_name, config in processors_and_configs:
-                if self._is_cancelled():  # ✅ 每个处理器前检查
-                    break
-            
-                metadata_info[0].append(processor_name)
-                metadata_info[1].append(config)
-                current_step += 1
-                item_type = "📁目录" if is_dir else "📄文件"
-                status = f"{item_type} {item.name} → {processor_name}"
-                self._call_progress(current_step, total_steps, status)
-                print(status)
-
-                if processor_name in PROCESSORS:  #AVAILABLE_PROCESSORS
-                    try:
-                        # ✅ 把 config 作为 context 的一部分传入
-                        # 建议：context.config = config，或作为参数
-
-                        func = PROCESSORS[processor_name]              
-
-                        result = PROCESSORS[processor_name](item, context,
-                                                            **config)
-                        context.add_result({
-                            "phase": "item",
-                            "path": str(item),
-                            "type": "dir" if is_dir else "file",
-                            "processor": processor_name,
-                            "config": config,
-                            "result": result
-                        })
-                        
-                        metadata_info[2].append('succeed')
-                    except Exception as e:
-                        print(f"❌ 处理失败 [{processor_name} on {item}]: {e}\n{traceback.format_exc()}")
-                        context.add_result({
-                            "error": str(e),
-                            "processor": processor_name,
-                            "path": str(item)
-                        })
-                        metadata_info[2].append('failed')  ##
-                        metadata_info[4].append(f'processor_name: {e}')    ##错误信息
-                else:
-                    print(f"⚠️ 未注册处理器: {processor_name}")
-                    metadata_info[2].append('failed')
-                    metadata_info[4].append(f'processor_name: 未注册处理器')    ##错误信息
-
-    # 🔹 3. post_process
-        if not self._is_cancelled() and post_func_name:
-            current_step += 1
-            self._call_progress(current_step, total_steps,
-                                f"🏁 最终处理: {post_func_name}")
             try:
-                if post_func_name in POST_PROCESSORS:
-                    result = POST_PROCESSORS[post_func_name](context,**config_post)
-                    context.add_result({"phase": "post", "result": result})
+                if global_pre_name in self._pre_processors:
+                    result = self._pre_processors[global_pre_name](context,
+                                                             **config_pre)
+                    context.add_result({
+                        "phase": "global_pre",
+                        "result": result
+                    })
+                    print('✅ 全局初始化完成!')
+                else:
+                    print(f"⚠️ 未注册的全局初始化函数: {global_pre_name}")
             except Exception as e:
-                print(f"❌ 最终处理失败: {e}\n{traceback.format_exc()}")
-    #    self.context = context
+                print(f"❌ 全局初始化失败: {e}\n{traceback.format_exc()}")
+                # 不中断，继续处理
+
+        # === 递归处理所有路径 ===
+        step_counter = [current_step]  # mutable reference
+        self._process_path_recursive(root, context, step_counter, total_steps)
+
+        # === 全局 post_process ===
+        if not self._is_cancelled() and global_post_name:
+            step_counter[0] += 1
+            self._call_progress(step_counter[0], total_steps,
+                                f"🏁 全局收尾: {global_post_name}")
+            print(f"🏁 执行全局最终处理: {global_post_name}")
+            try:
+                if global_post_name in self._post_processors:
+                    result = self._post_processors[global_post_name](context,
+                                                               **config_post)
+                    context.add_result({
+                        "phase": "global_post",
+                        "result": result
+                    })
+            except Exception as e:
+                print(f"❌ 全局最终处理失败: {e}\n{traceback.format_exc()}")
+
         return context
 
-    #获取前处理器需要的参数config
+    # ==================== PRIVATE HELPERS ====================
+
+    def _count_total_processor_calls(self, root: Path) -> int:
+        """遍历整棵树，统计所有 pre + post 处理器调用次数"""
+        total = 0
+
+        def _walk(p: Path):
+            nonlocal total
+            is_dir = p.is_dir()
+            rules = self._get_processors_for_path(p, is_dir)
+            total += len(rules.get("pre", [])) + len(rules.get(
+                "inline", [])) + len(rules.get("post", []))
+            if is_dir:
+                try:
+                    for child in sorted(p.iterdir()):
+                        _walk(child)
+                except (PermissionError, OSError):
+                    pass  # skip inaccessible dirs
+
+        _walk(root)
+        return total
+
+    def _process_path_recursive(self, path: Path, context: ProcessingContext,
+                                step_counter: List[int],
+                                total_steps: int) -> None:
+        is_dir = path.is_dir()
+        rules = self._get_processors_for_path(path, is_dir)
+        pre_procs = rules.get("pre", []) + rules.get("inline", [])
+        post_procs = rules.get("post", [])
+
+        # Pre-visit
+        if pre_procs:
+            self._execute_processor_list_with_progress(pre_procs, path,
+                                                       context, is_dir, "pre",
+                                                       step_counter,
+                                                       total_steps)
+
+        # Recurse into children (if dir)
+        if is_dir:
+            try:
+                children = sorted(path.iterdir())
+            except (PermissionError, OSError):
+                children = []
+            for child in children:
+                if self._is_cancelled():
+                    return
+                self._process_path_recursive(child, context, step_counter,
+                                             total_steps)
+
+        # Post-visit
+        if post_procs:
+            self._execute_processor_list_with_progress(post_procs, path,
+                                                       context, is_dir, "post",
+                                                       step_counter,
+                                                       total_steps)
+
+    def _get_processors_for_path(
+            self, path: Path,
+            is_dir: bool) -> Dict[str, List[Tuple[str, Dict]]]:
+        
+        # 收集所有候选规则（带优先级）
+        candidates  = {"pre": [], "post": [], "inline": []}
+
+        for pattern, rule in self.config.items():
+            if pattern in ("pre_process", "post_process", "config_pre",
+                           "config_post"):
+                continue
+            if not isinstance(rule, dict):
+                continue
+
+            if self._match_rule(path, pattern, is_dir):
+                config = rule.get("config", {})
+                priority = rule.get("priority", 0)
+          #      must_execute = rule.get("must_execute", False)must_execute
+
+                def add_to_list(lst, procs):
+                    for p in procs:
+                        lst.append((p, config, priority))
+
+                if "processors" in rule:
+                    add_to_list(candidates["inline"], rule["processors"])
+                if "pre_processors" in rule:
+                    add_to_list(candidates["pre"], rule["pre_processors"])
+                if "post_processors" in rule:
+                    add_to_list(candidates["post"], rule["post_processors"])
+
+        # 对每类处理器按优先级排序，返回最终列表（不去重）
+        result = {} # phase -> list of (name, config)
+        for phase in ["pre", "inline", "post"]:
+            procs = candidates[phase]
+            if not procs:
+                result[phase] = []
+                continue
+    
+            sorted_procs = sorted(candidates[phase], key=lambda x: -x[2])
+            result[phase] = [(name, cfg) for name, cfg, _ in sorted_procs]
+
+        return result
+
+    def _match_rule(self, path: Path, pattern: str, is_dir: bool) -> bool:
+        try:
+            rel_path = path.relative_to(self.root_path).as_posix()
+        except ValueError:
+            return False
+
+        if pattern == ".":
+            return str(path) == str(self.root_path)
+
+        # === 模式以 / 结尾 → 匹配目录本身（支持 *, ?, **, [...]）===
+        if pattern.endswith('/'):
+            if not is_dir:
+                return False
+            pattern_base = pattern.rstrip('/')
+            # 允许 ** 出现在目录匹配中！
+            return glob.globmatch(
+                rel_path,
+                pattern_base,
+                flags=glob.GLOBSTAR  #
+            )
+
+        # === 普通模式 → 匹配文件或目录（也支持 **）===
+        else:
+            return glob.globmatch(rel_path,
+                                  pattern,
+                                  flags= glob.GLOBSTAR)
+
+    def _execute_processor_list_with_progress(
+            self, procs: List[Tuple[str, Dict]], path: Path,
+            context: ProcessingContext, is_dir: bool, phase: str,
+            step_counter: List[int], total_steps: int):
+        rel_path = path.relative_to(
+            self.root_path) if path != self.root_path else Path(".")
+        parts = list(rel_path.parts) if rel_path != Path(".") else ["."]
+        parts_key = [p + '/' for p in parts[:-1]] + [parts[-1]]
+
+        metadata_info = [[], [], [], None, [], []]
+        context.set_metadata(parts_key, metadata_info)
+
+        for proc_name, config in procs:
+            if self._is_cancelled():
+                break
+
+            step_counter[0] += 1
+            item_type = "📁目录" if is_dir else "📄文件"
+            status = f"{item_type} {path.name} → {proc_name} ({phase})"
+            self._call_progress(step_counter[0], total_steps, status)
+            print(status)
+
+            metadata_info[0].append(proc_name)
+            metadata_info[1].append(config)
+
+            if proc_name in self._processors:
+                try:
+                    result = self._processors[proc_name](path, context, **config)
+                    context.add_result({
+                        "phase": phase,
+                        "path": str(path),
+                        "type": "dir" if is_dir else "file",
+                        "processor": proc_name,
+                        "config": config,
+                        "result": result
+                    })
+                    metadata_info[2].append('succeed')
+                except Exception as e:
+                    error_msg = f"{proc_name}: {e}"
+                    print(
+                        f"❌ 处理失败 [{proc_name} on {path}]: {e}\n{traceback.format_exc()}"
+                    )
+                    context.add_result({
+                        "error": str(e),
+                        "processor": proc_name,
+                        "path": str(path),
+                        "phase": phase
+                    })
+                    metadata_info[2].append('failed')
+                    metadata_info[4].append(error_msg)
+            else:
+                warn_msg = f"{proc_name}: 未注册处理器"
+                print(f"⚠️ {warn_msg}")
+                metadata_info[2].append('failed')
+                metadata_info[4].append(warn_msg)
+
     def _get_pre_config(self):
         func_name = self.config.get('pre_process')
         config = self.config.get('config_pre', {})
-        return [func_name, config]
+        return func_name, config
 
-    #获取后处理器需要的参数config
     def _get_post_config(self):
         func_name = self.config.get('post_process')
         config = self.config.get('config_post', {})
-        return [func_name, config]
-    
-  #      return self.config.get('config_post', {})
+        return func_name, config
 
-    #获取单个文件对应的处理函数processor和额外输入参数config
-    def _get_processors_for_file(self,
-                                 path: Path,
-                                 is_dir: bool = False
-                                 ) -> list[tuple[str, dict]]:
-        """
-        返回该路径匹配的处理器及其配置
-        返回格式: [(processor_name, config), ...]
-        """
-        matched_rules = []
+# 示例：获取当前启用的处理器
 
-        # 获取相对root_path的相对路径（统一用 /）
- #       try:
- #           rel_path = path.relative_to(self.root_path).as_posix()
- #       except ValueError:
- #           rel_path = path.name  # fallback
-
-        # 遍历所有规则， 对每个匹配模式的
-        for pattern, rule in self.config.items():
-            if pattern in ("pre_process", "post_process","config_pre","config_post"):   ##排除前后处理相关的参数
-                continue
-            if not isinstance(rule, dict) or "processors" not in rule:
-                continue  # 兼容旧格式？可选
-
-            # 检查是否匹配
-            if self._match_rule(path, pattern, is_dir):
-                priority = rule.get("priority", 5)  # 默认优先级 5
-                config = rule.get("config", {})
-                must_excute = rule.get("must_excute", False)
-                processors = rule["processors"]
-
-                for proc in processors:
-                    matched_rules.append({
-                        "processor": proc,
-                        "config": config,
-                        "priority": priority,
-                        "must_excute": must_excute
-                    })
-
-        # 按优先级降序（高优先级在前）
-        matched_rules.sort(key=lambda x: x["priority"], reverse=True)   #按priority从大到小排列
-
-        # 🔥 只返回最高优先级的处理器（防止重复处理）
-        if not matched_rules:
-            return []
-
-        matched_rules1 = [x for x in matched_rules if not x["must_excute"]]   ##
-        if matched_rules1:
-            highest_prio = matched_rules1[0]["priority"]   ##从不是must_excute的处理函数中选取优先级最大的数
-            top_rules = [r for r in matched_rules if r["priority"] == highest_prio or r["must_excute"]]   ##保留priority最大，或必须执行的processor，按priority排序。
-        else:
-            top_rules = [r for r in matched_rules if r["must_excute"]] 
-
-        return [(r["processor"], r["config"]) for r in top_rules]
-
-    def _match_rule(self,
-                    path: Path,
-                    pattern: str,
-                    is_dir: bool = False) -> bool:
-        rel_path = path.relative_to(self.root_path).as_posix()
-
-        if pattern.endswith('/'):   ##匹配文件夹
-            # 目录前缀匹配：data/ → 匹配 data文件夹
-            return fnmatch.fnmatch(rel_path, pattern.rstrip('/')) and is_dir    #rel_path.startswith(pattern.rstrip('/'))
-        else:
-            # 通配符匹配：*.txt, logs/**/*.log
-            return fnmatch.fnmatch(rel_path, pattern)
-
-    # 示例：获取当前启用的处理器
     def get_enabled_processors(self):
         enabled = {}
         for row in range(self.plugin_table.rowCount()):

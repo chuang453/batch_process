@@ -1,0 +1,54 @@
+# config.yaml
+# 1. 根目录本身：在进入根前标记，在目录遍历完成后做总结
+".":    # 根目录
+  pre_processors:
+    - mark_enter
+  post_processors:
+    - summarize_dir
+    - mark_exit
+
+# 2. data/ 目录：进入前/退出后标记 + 扫描所有直接子内容
+"*/":
+  pre_processors:
+    - mark_enter
+    - scan_file         # 会对 data/ 目录本身执行（是目录时返回 skipped）
+  post_processors:
+    - summarize_dir
+    - mark_exit
+  priority: 20
+
+# 3. data/raw/ 内所有 txt：先标记再扫描，再退出
+"raw/*.txt":
+  pre_processors:
+    - mark_enter
+    - scan_file
+  post_processors:
+    - mark_exit
+  priority: 90
+
+# 4. data/processed/ 内所有 txt：只扫描，不标记退出
+"processed/*.txt":
+  pre_processors:
+    - scan_file
+  post_processors:
+    - summarize_dir
+  priority: 70
+
+# 5. logs/ 目录及其 log 文件：进入时标记 → 扫描 → 退出时标记
+"logs/":
+  pre_processors:
+    - mark_enter
+  post_processors:
+    - mark_exit
+  priority: 50
+
+"logs/*.log":
+  pre_processors:
+    - scan_file
+  post_processors:
+    - mark_exit
+  priority: 60
+
+# 可选：全局一次性（如果需要）
+pre_process:
+post_process:

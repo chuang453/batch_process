@@ -297,8 +297,10 @@ class BatchProcessorGUI(QWidget):
         ## 控制台
         locals_dict = {'batch_processor': self.processor,
                        'context': self.context,
-                       'config_path': self.config_path,
-                       'root_path': self.root_path，
+                   #    'config_path': self.config_path,
+                   #    'root_path': self.root_path,
+                       'get_config_path': lambda: self.config_path,
+                       'get_root_path': lambda: self.root_path,
                        'pre_processors': PRE_PROCESSORS,
                        'processors': PROCESSORS,
                        'post_processors': POST_PROCESSORS}
@@ -351,7 +353,9 @@ class BatchProcessorGUI(QWidget):
                 padding-top: 10px;
             }
             QGroupBox::title {
-                subline-offset: -6px;
+                subcontrol-position: top left;
+                padding: 0 3px;
+                top: -8px; /* 微调位置 */
                 color: #333;
             }
             QSplitter::handle {
@@ -513,6 +517,8 @@ class BatchProcessorGUI(QWidget):
 
      #新开一个线程运行程序
     def _run_in_thread(self):
+        # 清空上下文，避免旧数据污染
+        self.context.clear()  # 需要在 ProcessingContext 中实现 clear()
         if not hasattr(self, 'config'):
             self._load_config()
         if not hasattr(self, 'config'):
@@ -523,20 +529,26 @@ class BatchProcessorGUI(QWidget):
             self._log("请指定目标目录")
             return
 
+        # ✅ 获取用户启用的插件
+        try:
+            pre_proc, main_proc, post_proc = self._get_enabled_processors_from_table()
+        except Exception as e:
+            self._log(f"❌ 获取启用插件失败: {e}", level=LogLevel.ERROR)
+            return
+
         # ✅ 禁用按钮
         self.btn_run.setEnabled(False)
         self.btn_cancel.setEnabled(True)  # 如果有取消按钮
-
+        # ✅ 关键：注入用户选择的处理器
         self.processor.set_config(self.config)
-        self._log(f"✅ 批处理器构建完毕!")
-        processor = self.processor 
+        self.processor.set_processors(pre=pre_proc, main=main_proc, post=post_proc)
+        self._log(f"✅ 批处理器构建完毕!启用插件: {len(pre_proc)+len(main_proc)+len(post_proc)} 个")
 
         # 设置进度回调
         def progress_callback(current, total, status="处理中"):
             self.progress_bar.setMaximum(total)
             self.progress_bar.setValue(current)
             self.progress_bar.setFormat(f"{status} [{current}/{total}]")
-
 
         # 创建 worker 和线程
         self.worker = BatchWorker(self.processor, self.root_path, self.context)
@@ -591,10 +603,6 @@ class BatchProcessorGUI(QWidget):
         context = self.context
         colnames = context.meta_colnames
         metadata = context.metadata
-
-#        metadata_ss = pprint.pformat(metadata, indent = 2, width = 40)
-#        metadata_ss = 'metadata:\n' + metadata_ss
-#        self._log(metadata_ss, level=LogLevel.INFO)
 
        ##显示
         dialog = QDialog(self)
@@ -807,82 +815,6 @@ class BatchProcessorGUI(QWidget):
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # 禁止编辑
                 self.results_table.setItem(i, j, item)
 
-
-##    def _show_results(self, results: list):
-##        """将结果列表转为表格展示"""
-##        if not results:
-##            if hasattr(self, 'results_table') and self.results_table is not None:
-##                self.results_table.setRowCount(0)
-##            return
-##
-##        # 转换为 DataFrame
-##        try:
-##            df = pd.DataFrame(results)
-##            df = df.fillna("")
-##        except Exception as e:
-##            QMessageBox.warning(self, "数据错误", f"无法解析结果数据: {e}")
-##            return
-##
-##        # 确保有主布局
-##        if not hasattr(self, 'main_layout'):
-##            return
-##
-##        # 移除旧表格
-##        if hasattr(self, 'results_table') and self.results_table is not None:
-##            self.main_layout.removeWidget(self.results_table)
-##            self.results_table.deleteLater()
-##            self.results_table = None
-##
-##        # 创建新表格
-##        self.results_table = QTableWidget()
-##        self.results_table.setRowCount(len(df))
-##        self.results_table.setColumnCount(len(df.columns))
-##        self.results_table.setHorizontalHeaderLabels(df.columns)
-##        self.results_table.verticalHeader().setVisible(False)
-##        self.results_table.setSortingEnabled(True)
-##        self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-##
-##        # 填充数据
-##        for i, row in df.iterrows():
-##            for j, val in enumerate(row):
-##                item = QTableWidgetItem(str(val))
-##                item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # 只读
-##                self.results_table.setItem(i, j, item)
-##
-##        # 添加标签（只添加一次）
-##        if not hasattr(self, 'result_label'):
-##            self.result_label = QLabel("📊 处理结果:")
-##            self.main_layout.addWidget(self.result_label)
-##        self.result_label.setVisible(True)
-##
-##        self.main_layout.addWidget(self.results_table)
-#        """将结果列表转为表格展示"""
-#        if not results:
-#            return
-#
-#        df = pd.DataFrame(results)
-#        df = df.fillna("")
-#
-#        # 清除旧表格（可选）
-#        if hasattr(self, 'results_table'):
-#            self.layout().removeWidget(self.results_table)
-#            self.results_table.deleteLater()
-#
-#        # 创建新表格
-#        self.results_table = QTableWidget()
-#        self.results_table.setRowCount(len(df))
-#        self.results_table.setColumnCount(len(df.columns))
-#        self.results_table.setHorizontalHeaderLabels(df.columns)
-#        self.results_table.verticalHeader().setVisible(False)
-#
-#        for i, row in df.iterrows():
-#            for j, val in enumerate(row):
-#                self.results_table.setItem(i, j, QTableWidgetItem(str(val)))
-#
-#        # 添加到布局
-#        self.layout().addWidget(QLabel("📊 处理结果:"))
-#        self.layout().addWidget(self.results_table)
-
     def _show_dataframe(self, df: pd.DataFrame):
         self.table = QTableWidget()
         self.table.setRowCount(len(df))
@@ -895,23 +827,85 @@ class BatchProcessorGUI(QWidget):
 
         self.layout.addWidget(self.table)
 
+    def _get_enabled_processors_from_table(self):
+        """
+        从 plugin_table 的“启用”列读取用户勾选状态，
+        返回 (pre_dict, main_dict, post_dict)
+        """
+        pre_enabled = {}
+        main_enabled = {}
+        post_enabled = {}
+    
+        all_processors = {**PRE_PROCESSORS, **PROCESSORS, **POST_PROCESSORS}
+    
+        for row in range(self.plugin_table.rowCount()):
+            cb_item = self.plugin_table.item(row, 1)  # 启用列
+
+            if not cb_item:
+                continue
+            func_name = cb_item.data(Qt.UserRole)
+            if not func_name or func_name not in all_processors:
+                continue
+            if cb_item.checkState() == Qt.Checked and func_name in all_processors:
+                func = all_processors[func_name]
+                ptype = getattr(func, 'processor_kind', 'file')
+                if ptype == 'pre':
+                    pre_enabled[func_name] = func
+                elif ptype == 'post':
+                    post_enabled[func_name] = func
+                else:
+                    main_enabled[func_name] = func
+    
+        return pre_enabled, main_enabled, post_enabled
+    
     ##刷新可用的处理函数表格
     def _refresh_plugin_table(self):
+
+        # 👇 保存当前勾选状态
+        current_state = {}
+        for row in range(self.plugin_table.rowCount()):
+            cb_item = self.plugin_table.item(row, 1)
+            name = cb_item.data(Qt.UserRole)
+            current_state[name] = (cb_item.checkState() == Qt.Checked)
+
+        # 清空表格
         self.plugin_table.setRowCount(0)
         self.plugin_table.clearContents()
         all_processors = PRE_PROCESSORS | PROCESSORS | POST_PROCESSORS
         # 添加到表格
-        for name, func in all_processors.items():
+        try:
+            # keep deterministic order (kind, priority, name) for stable UI
+            items = sorted(all_processors.items(), key=lambda kv: (
+                getattr(kv[1], 'processor_kind', ''),
+                -getattr(kv[1], 'processor_priority', 0),
+                kv[0]
+            ))
+        except Exception:
+            items = list(all_processors.items())
+
+        for name, func in items:
             row = self.plugin_table.rowCount()
             self.plugin_table.insertRow(row)
             # 文件名
             self.plugin_table.setItem(
                 row, 0, QTableWidgetItem(str(func.processor_source)))
-            # 启用复选框
+            
+            # metadata must be read up-front (was previously used before declaration)
+            meta = getattr(func, 'metadata', {})
+            # 👇 恢复勾选状态，若无则默认 False
             cb = QTableWidgetItem()
-            cb.setCheckState(Qt.Checked)
-            cb.setData(Qt.UserRole, func.processor_name)  # 存名字
-            self.plugin_table.setItem(row, 1, cb)            
+            cb.setFlags(cb.flags() | Qt.ItemIsUserCheckable)  # 必须设置才可勾选！
+            default_enabled = meta.get("enabled_by_default", True)  # 默认启用
+            current_check = current_state.get(name, default_enabled)
+            cb.setCheckState(Qt.Checked if current_check else Qt.Unchecked)
+            cb.setData(Qt.UserRole, func.processor_name)
+            self.plugin_table.setItem(row, 1, cb)
+
+            # 启用复选框
+#            cb = QTableWidgetItem()
+#            cb.setCheckState(Qt.Checked)
+#            cb.setData(Qt.UserRole, func.processor_name)  # 存名字
+#            self.plugin_table.setItem(row, 1, cb)            
             # 处理器名
             self.plugin_table.setItem(row, 2,
                                       QTableWidgetItem(func.processor_name))
@@ -983,6 +977,11 @@ class BatchProcessorGUI(QWidget):
         from importlib import reload
         from importlib.util import spec_from_file_location, module_from_spec
         import sys
+
+        # 清空所有已注册的外部插件（保留内置？）
+        # for name in list(PRE_PROCESSORS.keys()):
+        #     if name not in BUILTIN_PRE:  # 需定义内置列表
+        #         _unregister_pre(name)
 
         plugin_path = self.plugins_line.text().strip()
         if not plugin_path:

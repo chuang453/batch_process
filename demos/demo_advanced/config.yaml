@@ -1,0 +1,19 @@
+"**/*.txt":
+  processors:
+    - count_lines
+    - backup_file
+  config:
+    backup_dir: demo_advanced/backups
+
+"**/rename_me/*.txt":
+  processors:
+    - rename_file
+
+".":
+  pre_processors:
+    - set_path_name_dict
+
+pre_process:
+post_process: generate_summary
+config_post:
+  out_file: demo_advanced/summary.json

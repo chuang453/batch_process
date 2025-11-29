@@ -1,0 +1,3 @@
+fileA.txt   RenamedAlpha
+file1.txt   KeptName
+note2.txt   ExtraNote
