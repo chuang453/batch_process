@@ -2,7 +2,14 @@ from pathlib import Path
 from typing import List, Dict, Any
 from decorators.processor import processor
 from utils.pipeline import get_bucket, append_numbers, record_result, set_output, get_output
-from utils.adapters.docx_helpers import get_or_create_doc
+from utils.adapters.docx_helpers import (
+    get_or_create_doc,
+    save_doc,
+    docx_insert_table,
+    docx_insert_picture,
+    docx_write_text,
+    docx_table_with_caption_and_merges,
+)
 from utils.adapters.plot_helpers import save_plot_png_values
 from utils.io_helpers import safe_read_text, safe_read_json, csv_values
 
@@ -98,30 +105,26 @@ def folder_summary(path: Path, context, plot_width_inches: float = 4.5, dpi: int
         return
     doc, resolved = get_or_create_doc(Path(doc_path))
 
-    # 写表格
-    table = doc.add_table(rows=len(rows) + 1, cols=4)
-    hdr = table.rows[0].cells
-    hdr[0].text = "File"
-    hdr[1].text = "Count"
-    hdr[2].text = "Sum"
-    hdr[3].text = "Mean"
-    for i, stat in enumerate(rows, start=1):
-        c = table.rows[i].cells
-        c[0].text = Path(stat["file"]).name
-        c[1].text = str(stat["count"])
-        c[2].text = f"{stat['sum']:.2f}"
-        c[3].text = f"{stat['mean']:.2f}"
+    # 写表格（使用适配器），示例不合并单元格
+    header = ["File", "Count", "Sum", "Mean"]
+    data = [[
+        Path(stat["file"]).name,
+        str(stat["count"]),
+        f"{stat['sum']:.2f}",
+        f"{stat['mean']:.2f}",
+    ] for stat in rows]
+    docx_table_with_caption_and_merges(doc, data=data, header=header, caption=f"{Path(folder_key).name} 数据统计")
 
     # 生成并插入图
     img_path = Path(doc_path).parent / f"plot_{Path(folder_key).name}.png"
     try:
         save_plot_png_values(values, img_path, dpi=dpi, width_inches=plot_width_inches)
-        doc.add_picture(str(img_path))
+        docx_insert_picture(doc, img_path, width_inches=plot_width_inches, caption=f"{Path(folder_key).name} 数值分布")
     except Exception as e:
         record_result(context, "error", f"plot failed: {e}", folder=folder_key)
 
     # 总结段落
-    doc.add_paragraph(f"Summary for {Path(folder_key).name}: files={len(rows)}, total_values={len(values)}, sum={sum(values):.2f}")
-    doc.save(str(resolved))
+    docx_write_text(doc, f"Summary for {Path(folder_key).name}: files={len(rows)}, total_values={len(values)}, sum={sum(values):.2f}")
+    save_doc(doc, resolved)
     record_result(context, "ok", "folder summarized", folder=folder_key, files=len(rows))
     return {"folder": folder_key, "files": len(rows), "values": len(values)}
