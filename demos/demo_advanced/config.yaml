@@ -2,16 +2,21 @@
   processors:
     - count_lines
     - backup_file
+    - record_to_shared
   config:
     backup_dir: demo_advanced/backups
 
 "**/rename_me/*.txt":
   processors:
     - rename_file
+    - record_to_shared
 
 ".":
   pre_processors:
     - set_path_name_dict
+
+  post_processors:
+    - persist_history_sqlite
 
 pre_process:
 post_process: generate_summary

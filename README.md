@@ -217,6 +217,67 @@ python -m batch_process.cli <root> -c <config.yaml>
   - `context.get_shared(keys, default)` / `context.get_data(keys, default)`：读取共享或桶数据
   - `context.add_result({...})`：记录结构化结果，GUI“处理结果”表会显示
 
+Recording & Built-in Recorders
+- 引擎职责变更：为了使记录行为可插拔并便于按路径/优先级启用，`core/engine.py` 不再在每次处理器执行后自动把结果写入 `context` 或 `context.shared`。
+  - 现在有一组可选的系统内置 recorder processors（在 `processors/builtin_recorders.py`）：
+    - `record_to_shared`：将简短执行记录追加到 `context.shared['executed'][...parts_key...]`（内存级别）。适合作为 inline 或 post processor。示例配置：
+
+```yaml
+"**/*.txt":
+  processors:
+    - process_text
+    - record_to_shared
+
+"**/":
+  post_processors:
+    - persist_history_jsonl
+```
+
+    - `persist_history_sqlite`：把最近的 `context.results` 条目（若存在）异步写入到 per-log-dir SQLite 数据库 `processed_history.db`，用于长期保存与可靠查询。
+  - 兼容性：已有的 processors 仍然可以直接调用 `context.add_result(...)` 来写入结果；内置 recorder 是一个更可控、可配置的替代方案。内置持久化处理器现在默认写入 SQLite（`persist_history_sqlite`）。
+
+使用建议
+  - 小规模或演示：在 config 中为需要记录的规则显式添加 `record_to_shared`/`persist_history_sqlite`（如 demos 已更新）。
+- 大规模目录树：建议只在必要的规则中启用记录，或使用 `persist_history_jsonl`（异步化写入可在未来实现）以避免内存增长。
+
+# 示例（读取历史）：
+```python
+# 读取内存中的执行历史
+history = context.get_shared(['executed', 'some/', 'path.txt'])
+
+# 读取持久化历史（SQLite）
+from processors import builtin_recorders
+rows = builtin_recorders.read_history_rows('debug_logs', limit=100)
+for r in rows:
+  print(r['ts'], r['raw'])
+```
+
+数据库模式（简要）:
+
+- 文件位置：`<log_dir>/processed_history.db`
+- 表：`processed_history`
+  - `id`: INTEGER PRIMARY KEY AUTOINCREMENT
+  - `ts`: TEXT ISO 时间戳
+  - `path`: TEXT (被处理的路径)
+  - `processor`: TEXT
+  - `phase`: TEXT (pre/inline/post)
+  - `status`: TEXT
+  - `cfg`: TEXT (JSON 编码的处理器配置)
+  - `result`: TEXT (JSON 编码的处理器返回值)
+  - `error`: TEXT
+  - `raw`: TEXT (JSON 编码的原始记录)
+
+示例（SQLite 查询）：
+```python
+import sqlite3
+conn = sqlite3.connect('debug_logs/processed_history.db')
+cur = conn.cursor()
+cur.execute("SELECT ts, processor, raw FROM processed_history ORDER BY id DESC LIMIT 10")
+for ts, proc, raw in cur.fetchall():
+  print(ts, proc, raw)
+conn.close()
+```
+
 GUI 要点
 - 主界面：
   - 路径设置（配置文件、目标目录、插件目录）

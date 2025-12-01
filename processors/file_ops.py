@@ -7,7 +7,7 @@
 import re
 from pathlib import Path
 import shutil
-from typing import Dict, Any
+from typing import Dict, Any, Tuple, List
 from core.engine import ProcessingContext
 from decorators.processor import processor
 SCRIPT_DIR = Path(__file__).parent.resolve()   ##此脚本的路径
@@ -168,58 +168,79 @@ def delete_file(file: Path, context: ProcessingContext, **kwargs) -> Dict[str, A
     "tags": [""]
 })
 def set_path_name_dict(path: Path, context: ProcessingContext, **kwargs):
-
     if not path.is_dir():    ##非文件夹，跳过
-        return
-
-    all_dict = context.setdefault_data([ "file_ops", "path_name_dict", str(path)], {})
-    _dict_file = kwargs.get('_dict_file', '_dict.txt')   ##字典文件名
-    dict_file = path / _dict_file
-    
-    ##文件存在，则读取
-    if dict_file.is_file() and not all_dict:    ## all_dict为空字典时
-        separator_pattern = r'\s*,\s*|\s+'
-        config = {}
-        with open(dict_file, 'r', encoding='utf-8') as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.strip()
-                
-                # 跳过空行和注释
-                if not line or line.startswith('#'):
-                    continue
-                
-                # 使用正则分割，最多分割成两部分（防止值中包含分隔符）
-                parts = re.split(separator_pattern, line, maxsplit=1)
-                
-                if len(parts) < 2:
-                    print(f"⚠️  第 {line_num} 行格式错误（缺少值）: {line}")
-                    continue
-                
-                key, value = parts[0].strip(), parts[1].strip()
-                if not key:
-                    print(f"⚠️  第 {line_num} 行键为空: {line}")
-                    continue
-                
-                config[key] = value
-        all_dict.update(config)
-
-    ##为其内文件添加别名
-    path_label = context.get_data(['labels', str(path)], [])
-    for pathi in path.iterdir():      
-        context.set_data(['labels', str(pathi)],  path_label + [all_dict.get( pathi.name, pathi.name )]  )
-
-   ##文件夹的category名
-    
-    path_cate = context.get_data( ['categories', str(path)], [] )
-    _suffix = kwargs.get('category_suffix', '.cate')
-    cate_name = [pathi.stem for pathi in path.glob('*'+ _suffix)]
-    if cate_name:
-        for pathi in path.iterdir():
-            context.set_data(['categories', str(pathi)], path_cate + [cate_name[0]]  )
-    
-    return {
+        return {
             "file": str(path),
             "processor": "set_path_name_dict",
-            "status": "success"
-          }
+            "status": "skipped",
+            "reason": "not a directory"
+        }
+
+    # 参数
+    _dict_file = kwargs.get('_dict_file', '_dict.txt')
+    force = bool(kwargs.get('force', False))
+    category_suffix = kwargs.get('category_suffix', '.cate')
+
+    all_dict = context.setdefault_data(["file_ops", "path_name_dict", str(path)], {})
+    dict_file = path / _dict_file
+
+    # 解析器：更鲁棒地解析键值对文件，返回字典和警告列表
+    def _parse_dict_file(p: Path, sep_pattern: str = r'\s*,\s*|\s+') -> Tuple[Dict[str, str], List[str]]:
+        cfg: Dict[str, str] = {}
+        warnings: List[str] = []
+        if not p.is_file():
+            return cfg, warnings
+        with open(p, 'r', encoding=kwargs.get('encoding', 'utf-8')) as f:
+            for i, raw in enumerate(f, 1):
+                line = raw.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = re.split(sep_pattern, line, maxsplit=1)
+                if len(parts) < 2:
+                    warnings.append(f"line {i}: missing value\n  {line}")
+                    continue
+                key, value = parts[0].strip(), parts[1].strip()
+                if not key:
+                    warnings.append(f"line {i}: empty key\n  {line}")
+                    continue
+                # 如果重复键，记录警告并覆盖（保持最后一条生效）
+                if key in cfg:
+                    warnings.append(f"line {i}: duplicate key '{key}', overwritten")
+                cfg[key] = value
+        return cfg, warnings
+
+    # 只有在文件存在并且未解析过时，或者强制重载时才解析
+    parse_warnings: List[str] = []
+    parsed: Dict[str, str] = {}
+    if dict_file.is_file() and (force or not all_dict):
+        parsed, parse_warnings = _parse_dict_file(dict_file)
+        if parsed:
+            all_dict.update(parsed)
+
+    # 为目录内的每个子项设置标签（列表形式）
+    path_label = context.get_data(['labels', str(path)], []) or []
+    labels_added = 0
+    for pathi in sorted(path.iterdir()):
+        # 仅对文件和目录设置标签
+        name = pathi.name
+        label_value = all_dict.get(name, name)
+        new_label = path_label + [label_value]
+        context.set_data(['labels', str(pathi)], new_label)
+        labels_added += 1
+
+    # 收集 category 文件（支持多个 .cate 文件），保留发现顺序
+    path_cate = context.get_data(['categories', str(path)], []) or []
+    cate_list = [p.stem for p in sorted(path.glob(f'*{category_suffix}'))]
+    for pathi in sorted(path.iterdir()):
+        context.set_data(['categories', str(pathi)], path_cate + cate_list)
+
+    return {
+        "file": str(path),
+        "processor": "set_path_name_dict",
+        "status": "success",
+        "entries_parsed": len(parsed),
+        "warnings": parse_warnings,
+        "labels_added": labels_added,
+        "categories": cate_list
+    }
 

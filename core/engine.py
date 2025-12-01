@@ -128,12 +128,10 @@ class BatchProcessor:
                 return context
             try:
                 if global_pre_name in self._pre_processors:
+                    # Call the global pre-processor. Recording of results
+                    # moved to optional built-in processors (e.g. record_to_shared)
                     result = self._pre_processors[global_pre_name](
                         context, **config_pre)
-                    context.add_result({
-                        "phase": "global_pre",
-                        "result": result
-                    })
                     print('✅ 全局初始化完成!')
                 else:
                     print(f"⚠️ 未注册的全局初始化函数: {global_pre_name}")
@@ -153,12 +151,10 @@ class BatchProcessor:
             print(f"🏁 执行全局最终处理: {global_post_name}")
             try:
                 if global_post_name in self._post_processors:
+                    # Call the global post-processor. Post-run recording
+                    # should be performed by configured post-processors.
                     result = self._post_processors[global_post_name](
                         context, **config_post)
-                    context.add_result({
-                        "phase": "global_post",
-                        "result": result
-                    })
             except Exception as e:
                 print(f"❌ 全局最终处理失败: {e}\n{traceback.format_exc()}")
 
@@ -262,6 +258,28 @@ class BatchProcessor:
             sorted_procs = sorted(candidates[phase], key=lambda x: -x[2])
             result[phase] = [(name, cfg) for name, cfg, _ in sorted_procs]
 
+        # Optionally inject built-in recorders when enabled in top-level config
+        try:
+            if self.config.get('enable_builtin_recorders'):
+                br = self.config.get('builtin_recorders', {}) or {}
+                rec_name = br.get('record', 'record_to_shared')
+                persist_name = br.get('persist', 'persist_history_sqlite')
+
+                # inline recorder (per-file/per-path quick record)
+                if rec_name and rec_name in self._processors:
+                    names = [n for n, _ in result.get('inline', [])]
+                    if rec_name not in names:
+                        result.setdefault('inline', []).append((rec_name, {}))
+
+                # post-run persistence
+                if persist_name and persist_name in self._processors:
+                    names = [n for n, _ in result.get('post', [])]
+                    if persist_name not in names:
+                        result.setdefault('post', []).append((persist_name, {}))
+        except Exception:
+            # non-fatal: misconfiguration should not break rule matching
+            pass
+
         return result
 
     def _match_rule(self, path: Path, pattern: str, is_dir: bool) -> bool:
@@ -318,86 +336,28 @@ class BatchProcessor:
                 try:
                     result = self._processors[proc_name](path, context,
                                                          **config)
-                    context.add_result({
-                        "phase": phase,
-                        "path": str(path),
-                        "type": "dir" if is_dir else "file",
-                        "processor": proc_name,
-                        "config": config,
-                        "result": result
-                    })
+                    # engine no longer auto-records processor results here.
+                    # If a processor wants its output persisted it should
+                    # call `context.add_result(...)` itself or enable a
+                    # built-in recorder like `record_to_shared`.
                     metadata_info[2].append('succeed')
-                    # record per-path execution into shared context for easy querying
-                    try:
-                        ts = datetime.now().isoformat(sep=' ',
-                                                      timespec='seconds')
-                        exec_key = ['executed'] + parts_key
-                        executed_list = context.setdefault_shared(exec_key, [])
-                        executed_list.append({
-                            'time': ts,
-                            'processor': proc_name,
-                            'phase': phase,
-                            'path': str(path),
-                            'type': 'dir' if is_dir else 'file',
-                            'status': 'succeed',
-                            'config': config,
-                            'result': result
-                        })
-                    except Exception:
-                        pass
                 except Exception as e:
                     error_msg = f"{proc_name}: {e}"
                     print(
                         f"❌ 处理失败 [{proc_name} on {path}]: {e}\n{traceback.format_exc()}"
                     )
-                    context.add_result({
-                        "error": str(e),
-                        "processor": proc_name,
-                        "path": str(path),
-                        "phase": phase
-                    })
+                    # error recording should be handled by processors or
+                    # by optional recorders; do not auto-add here.
                     metadata_info[2].append('failed')
                     metadata_info[4].append(error_msg)
-                    # record failed execution
-                    try:
-                        ts = datetime.now().isoformat(sep=' ',
-                                                      timespec='seconds')
-                        exec_key = ['executed'] + parts_key
-                        executed_list = context.setdefault_shared(exec_key, [])
-                        executed_list.append({
-                            'time': ts,
-                            'processor': proc_name,
-                            'phase': phase,
-                            'path': str(path),
-                            'type': 'dir' if is_dir else 'file',
-                            'status': 'failed',
-                            'config': config,
-                            'error': str(e)
-                        })
-                    except Exception:
-                        pass
+                    
             else:
                 warn_msg = f"{proc_name}: 未注册处理器"
                 print(f"⚠️ {warn_msg}")
                 metadata_info[2].append('failed')
                 metadata_info[4].append(warn_msg)
-                # record unregistered processor as failed
-                try:
-                    ts = datetime.now().isoformat(sep=' ', timespec='seconds')
-                    exec_key = ['executed'] + parts_key
-                    executed_list = context.setdefault_shared(exec_key, [])
-                    executed_list.append({
-                        'time': ts,
-                        'processor': proc_name,
-                        'phase': phase,
-                        'path': str(path),
-                        'type': 'dir' if is_dir else 'file',
-                        'status': 'failed',
-                        'config': config,
-                        'error': warn_msg
-                    })
-                except Exception:
-                    pass
+                # unregistered processor — no automatic recording here;
+                # processors or optional recorders should handle recording.
 
     def _get_pre_config(self):
         func_name = self.config.get('pre_process')

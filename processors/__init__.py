@@ -1,13 +1,18 @@
-# processors/__init__.py
-"""
-导入所有处理器模块，确保 @processor 装饰器注册所有函数
+"""processors package
+
+Import builtin processors so tests and code can access them as
+`processors.builtin_recorders`. Also re-export the processor registries
+from `decorators.processor` for convenience.
 """
 
-from . import file_ops
-from . import custom
+from decorators.processor import PROCESSORS, PRE_PROCESSORS, POST_PROCESSORS
+
+# import builtin modules (ensure they register their processors)
 from . import builtin_recorders
 
-# 从装饰器中导入注册表
-#from decorators.processor import PROCESSORS
-
-#__all__ = ['PROCESSORS',  'log_parser', 'file_ops', 'custom']
+__all__ = [
+    "PROCESSORS",
+    "PRE_PROCESSORS",
+    "POST_PROCESSORS",
+    "builtin_recorders",
+]

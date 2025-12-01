@@ -2,10 +2,10 @@
 # 目录模式以 / 结尾匹配目录本身；文件模式匹配文件。
 "**/":
   pre_processors: ["enter_folder_word"]
-  post_processors: ["folder_summary"]
+  conda init powershell  conda init powershell  post_processors: ["folder_summary", "persist_history_sqlite"]
 "**/*.csv":
-  processors: ["process_data_file"]
+  processors: ["process_data_file", "record_to_shared"]
 "**/*.txt":
-  processors: ["process_data_file"]
+  processors: ["process_data_file", "record_to_shared"]
 "**/*.json":
-  processors: ["process_data_file"]
+  processors: ["process_data_file", "record_to_shared"]
