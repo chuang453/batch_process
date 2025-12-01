@@ -5,6 +5,7 @@
 
 from . import file_ops
 from . import custom
+from . import builtin_recorders
 
 # 从装饰器中导入注册表
 #from decorators.processor import PROCESSORS

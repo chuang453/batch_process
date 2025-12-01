@@ -1,6 +1,7 @@
 # core.py - BatchProcessor with pre/post per-path and accurate progress
 
 from pathlib import Path
+from datetime import datetime
 import fnmatch
 from wcmatch import glob
 import traceback
@@ -19,6 +20,10 @@ class BatchProcessor:
         self._pre_processors = PRE_PROCESSORS
         self._processors = PROCESSORS
         self._post_processors = POST_PROCESSORS
+        # current execution status (most recent status string)
+        self.current_status: Optional[str] = None
+        # default status log file (can be overridden via `set_status_log`)
+        self.status_log_path: Path = Path.cwd() / 'debug_logs' / 'status.log'
 
     def set_config(self, config: Dict):
         self.config = config
@@ -27,11 +32,52 @@ class BatchProcessor:
         self.progress_callback = callback
 
     def _call_progress(self, current: int, total: int, status: str):
+        # update in-memory status
+        try:
+            self.current_status = status
+        except Exception:
+            pass
+
+        # emit to any UI / external callback
         if self.progress_callback:
-            self.progress_callback(current, total, status)
+            try:
+                self.progress_callback(current, total, status)
+            except Exception:
+                # ensure progress logging doesn't interrupt processing
+                pass
+
+        # persist a short status line to the status log for external monitoring
+        try:
+            log_path = self.status_log_path
+            log_dir = log_path.parent
+            if not log_dir.exists():
+                log_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().isoformat(sep=' ', timespec='seconds')
+            with open(log_path, 'a', encoding='utf-8') as fh:
+                fh.write(f"{ts} | {current}/{total} | {status}\n")
+        except Exception:
+            # non-fatal: don't raise from logging failures
+            pass
 
     def set_worker(self, worker):
         self.worker = worker
+
+    def set_status_log(self, path: str | Path):
+        """Override the status log file path. Path may be a directory or file.
+
+        Examples:
+          - `processor.set_status_log('C:/temp/status.log')`
+          - `processor.set_status_log('debug_logs/status.log')`
+        """
+        p = Path(path)
+        # if a directory given, use `status.log` inside it
+        if p.exists() and p.is_dir():
+            p = p / 'status.log'
+        # ensure parent exists (created on first write as well)
+        self.status_log_path = p
+
+    def get_current_status(self) -> Optional[str]:
+        return self.current_status
 
     def _is_cancelled(self) -> bool:
         if self.worker and self.worker.thread():
@@ -82,8 +128,8 @@ class BatchProcessor:
                 return context
             try:
                 if global_pre_name in self._pre_processors:
-                    result = self._pre_processors[global_pre_name](context,
-                                                             **config_pre)
+                    result = self._pre_processors[global_pre_name](
+                        context, **config_pre)
                     context.add_result({
                         "phase": "global_pre",
                         "result": result
@@ -107,8 +153,8 @@ class BatchProcessor:
             print(f"🏁 执行全局最终处理: {global_post_name}")
             try:
                 if global_post_name in self._post_processors:
-                    result = self._post_processors[global_post_name](context,
-                                                               **config_post)
+                    result = self._post_processors[global_post_name](
+                        context, **config_post)
                     context.add_result({
                         "phase": "global_post",
                         "result": result
@@ -177,9 +223,9 @@ class BatchProcessor:
     def _get_processors_for_path(
             self, path: Path,
             is_dir: bool) -> Dict[str, List[Tuple[str, Dict]]]:
-        
+
         # 收集所有候选规则（带优先级）
-        candidates  = {"pre": [], "post": [], "inline": []}
+        candidates = {"pre": [], "post": [], "inline": []}
 
         for pattern, rule in self.config.items():
             if pattern in ("pre_process", "post_process", "config_pre",
@@ -191,7 +237,8 @@ class BatchProcessor:
             if self._match_rule(path, pattern, is_dir):
                 config = rule.get("config", {})
                 priority = rule.get("priority", 0)
-          #      must_execute = rule.get("must_execute", False)must_execute
+
+                #      must_execute = rule.get("must_execute", False)must_execute
 
                 def add_to_list(lst, procs):
                     for p in procs:
@@ -205,13 +252,13 @@ class BatchProcessor:
                     add_to_list(candidates["post"], rule["post_processors"])
 
         # 对每类处理器按优先级排序，返回最终列表（不去重）
-        result = {} # phase -> list of (name, config)
+        result = {}  # phase -> list of (name, config)
         for phase in ["pre", "inline", "post"]:
             procs = candidates[phase]
             if not procs:
                 result[phase] = []
                 continue
-    
+
             sorted_procs = sorted(candidates[phase], key=lambda x: -x[2])
             result[phase] = [(name, cfg) for name, cfg, _ in sorted_procs]
 
@@ -240,9 +287,7 @@ class BatchProcessor:
 
         # === 普通模式 → 匹配文件或目录（也支持 **）===
         else:
-            return glob.globmatch(rel_path,
-                                  pattern,
-                                  flags= glob.GLOBSTAR)
+            return glob.globmatch(rel_path, pattern, flags=glob.GLOBSTAR)
 
     def _execute_processor_list_with_progress(
             self, procs: List[Tuple[str, Dict]], path: Path,
@@ -271,7 +316,8 @@ class BatchProcessor:
 
             if proc_name in self._processors:
                 try:
-                    result = self._processors[proc_name](path, context, **config)
+                    result = self._processors[proc_name](path, context,
+                                                         **config)
                     context.add_result({
                         "phase": phase,
                         "path": str(path),
@@ -281,6 +327,24 @@ class BatchProcessor:
                         "result": result
                     })
                     metadata_info[2].append('succeed')
+                    # record per-path execution into shared context for easy querying
+                    try:
+                        ts = datetime.now().isoformat(sep=' ',
+                                                      timespec='seconds')
+                        exec_key = ['executed'] + parts_key
+                        executed_list = context.setdefault_shared(exec_key, [])
+                        executed_list.append({
+                            'time': ts,
+                            'processor': proc_name,
+                            'phase': phase,
+                            'path': str(path),
+                            'type': 'dir' if is_dir else 'file',
+                            'status': 'succeed',
+                            'config': config,
+                            'result': result
+                        })
+                    except Exception:
+                        pass
                 except Exception as e:
                     error_msg = f"{proc_name}: {e}"
                     print(
@@ -294,11 +358,46 @@ class BatchProcessor:
                     })
                     metadata_info[2].append('failed')
                     metadata_info[4].append(error_msg)
+                    # record failed execution
+                    try:
+                        ts = datetime.now().isoformat(sep=' ',
+                                                      timespec='seconds')
+                        exec_key = ['executed'] + parts_key
+                        executed_list = context.setdefault_shared(exec_key, [])
+                        executed_list.append({
+                            'time': ts,
+                            'processor': proc_name,
+                            'phase': phase,
+                            'path': str(path),
+                            'type': 'dir' if is_dir else 'file',
+                            'status': 'failed',
+                            'config': config,
+                            'error': str(e)
+                        })
+                    except Exception:
+                        pass
             else:
                 warn_msg = f"{proc_name}: 未注册处理器"
                 print(f"⚠️ {warn_msg}")
                 metadata_info[2].append('failed')
                 metadata_info[4].append(warn_msg)
+                # record unregistered processor as failed
+                try:
+                    ts = datetime.now().isoformat(sep=' ', timespec='seconds')
+                    exec_key = ['executed'] + parts_key
+                    executed_list = context.setdefault_shared(exec_key, [])
+                    executed_list.append({
+                        'time': ts,
+                        'processor': proc_name,
+                        'phase': phase,
+                        'path': str(path),
+                        'type': 'dir' if is_dir else 'file',
+                        'status': 'failed',
+                        'config': config,
+                        'error': warn_msg
+                    })
+                except Exception:
+                    pass
 
     def _get_pre_config(self):
         func_name = self.config.get('pre_process')
@@ -309,6 +408,7 @@ class BatchProcessor:
         func_name = self.config.get('post_process')
         config = self.config.get('config_post', {})
         return func_name, config
+
 
 # 示例：获取当前启用的处理器
 
