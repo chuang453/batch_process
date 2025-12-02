@@ -30,10 +30,63 @@ def prepare_plot_data_impl(target: Path,
                            to_disk: bool = False,
                            force: bool = False,
                            encoding: str = 'utf-8') -> dict:
-    """Prepare/collect data for plotting without any ProcessingContext.
+    """Prepare / collect data for plotting (pure function, no context).
 
-    Returns a dict: on success `{'status':'cached','cache_key':..., 'rows': N, 'df': DataFrame}`
-    or when saved to disk returns `path` instead of `df`.
+    This function centralizes reading/preparing tabular data for plotting.
+    It accepts several mutually-compatible input sources and returns a
+    standardized dict describing the result. The returned dict has the
+    following shapes:
+
+    - On success with an in-memory DataFrame:
+        {
+            "status": "cached",
+            "cache_key": "...",
+            "rows": <int>,
+            "df": <pandas.DataFrame>
+        }
+
+    - When `to_disk=True` and data is persisted to a file:
+        {
+            "status": "cached",
+            "cache_key": "...",
+            "rows": <int>,
+            "path": "<path to file>"
+        }
+
+    - When no data source is found:
+        {"status": "skipped", "reason": "no data source found"}
+
+    - On error:
+        {"status": "error", "error": "..."}
+
+    Parameters
+    - target: Path used as a reference (typically the file being processed);
+      used to choose a sensible default output directory when persisting.
+    - cache_key: optional string to identify cached data; generated from
+      `target` + inputs if omitted.
+    - db_url / query: when provided together, run the SQL `query` against
+      `db_url` (supports `sqlite:///` and SQLAlchemy URLs).
+    - csv_path: read CSV if provided and exists.
+    - data: in-memory data (pandas DataFrame or any structure accepted by
+      `pd.DataFrame`). If present, this takes precedence.
+    - to_disk: if True, persist the prepared data under
+      `Path(target).parent / 'plot_data'` returning its path.
+    - force / encoding: auxiliary options.
+
+    Examples
+    - Prepare from an in-memory DataFrame::
+
+        >>> df = pd.DataFrame({"x": [1,2,3], "y": [4,5,6]})
+        >>> prepare_plot_data_impl(Path("/tmp/foo.txt"), data=df)
+        {"status": "cached", "cache_key": "...", "rows": 3, "df": <DataFrame>}
+
+    - Read from CSV and save to disk::
+
+        >>> prepare_plot_data_impl(Path("/tmp/foo.txt"), csv_path="/data/my.csv", to_disk=True)
+        {"status": "cached", "cache_key": "...", "rows": 1000, "path": "/tmp/plot_data/<key>.parquet"}
+
+    The function is intentionally pure and returns DataFrame objects when
+    possible so callers (or tests) can inspect the data without file IO.
     """
     if not cache_key:
         h = hashlib.sha1()
@@ -107,9 +160,86 @@ def plot_from_spec_impl(target: Path,
                         fmt: str = 'png',
                         dpi: int = 150,
                         base_style: dict = None) -> dict:
-    """Create plot files from a spec using provided DataFrame (no context).
+    """Create plot(s) from a specification using the provided data.
 
-    Returns {'status':'success','figure_path': str, 'warnings': [...]} or error dict.
+    This function accepts a `spec` describing subplot layout, series and
+    saving options, and draws figures using matplotlib (Agg backend).
+    It returns a standardized dict on success or error:
+
+    - Success:
+        {"status": "success", "figure_path": "<saved path>", "warnings": [...]} 
+    - Skipped (no spec):
+        {"status": "skipped", "reason": "no spec"}
+    - Error:
+        {"status": "error", "error": "..."}
+
+    Spec format (minimal example)::
+
+        spec = {
+            "title": "My plot",
+            "layout": {"rows": 1, "cols": 1},
+            "subplots": [
+                {
+                    "title": "Series A",
+                    "x_label": "x",
+                    "y_label": "value",
+                    "series": [
+                        {"x": "x", "y": "y", "label": "A", "style": "-"}
+                    ],
+                    "legend": True
+                }
+            ],
+            "save": {"filename": "myplot.png", "dpi": 150}
+        }
+
+    Grid placement and spanning
+    - Each subplot entry may include `row` and `col` (integers) to specify
+      its starting grid cell, plus optional `rowspan` and `colspan` (integers)
+      to span multiple grid cells. Indices are 0-based.
+    - If `row`/`col` are omitted the function will auto-place the subplot
+      into the next available cell scanning left-to-right, top-to-bottom.
+    - If a requested block overlaps an already-placed subplot the
+      subplot will be skipped and a warning will be included in the
+      returned `warnings` list.
+
+    Placement example (2x2 grid)::
+
+        spec = {
+            "layout": {"rows": 2, "cols": 2},
+            "subplots": [
+                {"row": 0, "col": 0, "rowspan": 2, "colspan": 1, "series": [...]},
+                {"row": 0, "col": 1, "series": [...]},
+                {"row": 1, "col": 1, "series": [...]}
+            ]
+        }
+
+    Notes
+    - `row`/`col` are 0-based by design (the test-suite and examples use 0-based
+      indices). If you prefer 1-based indices I can add an option to accept
+      that and convert internally.
+    - The function uses a GridSpec internally and returns warnings when
+      placement cannot be honored rather than raising an exception, because
+      specs are often generated by users and we prefer robust behavior in
+      batch runs.
+
+    Parameters
+    - target: a reference Path used to derive default output filename.
+    - data: pandas DataFrame or data convertible to DataFrame. If a series
+      includes an explicit `data` entry it will be used for that series.
+    - spec: dict describing layout, series and save options (see example).
+    - out_dir: directory to write output files; defaults to `Path(target).parent`.
+    - fmt / dpi / base_style: appearance options.
+
+    Examples
+    - Plot from an existing DataFrame::
+
+        >>> df = pd.DataFrame({"x": [1,2,3], "y": [2,3,5]})
+        >>> spec = {"layout": {"rows":1, "cols":1}, "subplots": [{"series": [{"x":"x","y":"y"}]}]}
+        >>> plot_from_spec_impl(Path("/tmp/foo.txt"), data=df, spec=spec, out_dir=str(tmpdir))
+        {"status": "success", "figure_path": "/tmp/myplot.png", "warnings": []}
+
+    The function closes the created figure before returning so it is safe
+    to call repeatedly in long-running processes.
     """
     data = _ensure_df(data)
     base_style = base_style or {}
@@ -127,24 +257,81 @@ def plot_from_spec_impl(target: Path,
         cols = int(layout.get('cols', 1))
         figsize = tuple(spec.get('figsize', [8 * cols, 4 * rows]))
 
-        fig, axes = plt.subplots(rows, cols, figsize=figsize)
-        # normalize axes to flat iterable
-        if isinstance(axes, (list, tuple)):
-            axes_flat = list(axes)
-        else:
-            try:
-                axes_flat = list(axes.flat)
-            except Exception:
-                axes_flat = [axes]
+        fig = plt.figure(figsize=figsize)
+        gs = fig.add_gridspec(rows, cols)
+
+        # occupancy grid to support rowspan/colspan placement
+        occupied = [[False for _ in range(cols)] for _ in range(rows)]
+
+        def _find_next_empty():
+            for ri in range(rows):
+                for ci in range(cols):
+                    if not occupied[ri][ci]:
+                        return ri, ci
+            return None, None
 
         subplots = spec.get('subplots', [])
         base_series_style = base_style.get('series', {}) if isinstance(
             base_style, dict) else {}
 
         for si, subplot in enumerate(subplots):
-            if si >= len(axes_flat):
-                break
-            ax = axes_flat[si]
+            # determine target position and span
+            r = subplot.get('row', None)
+            c = subplot.get('col', None)
+            rowspan = int(subplot.get('rowspan', 1))
+            colspan = int(subplot.get('colspan', 1))
+
+            if r is None or c is None:
+                r, c = _find_next_empty()
+                if r is None:
+                    warnings.append(f"subplot {si}: no space left in grid")
+                    break
+
+            # validate indices
+            try:
+                r = int(r)
+                c = int(c)
+            except Exception:
+                warnings.append(
+                    f"subplot {si}: invalid row/col '{subplot.get('row')}/{subplot.get('col')}'"
+                )
+                continue
+
+            if r < 0 or c < 0 or r >= rows or c >= cols:
+                warnings.append(
+                    f"subplot {si}: position ({r},{c}) out of grid bounds")
+                continue
+
+            # clamp spans to grid
+            if rowspan < 1:
+                rowspan = 1
+            if colspan < 1:
+                colspan = 1
+
+            end_r = min(rows, r + rowspan)
+            end_c = min(cols, c + colspan)
+
+            # check occupancy for requested block
+            conflict = False
+            for ri in range(r, end_r):
+                for ci in range(c, end_c):
+                    if occupied[ri][ci]:
+                        conflict = True
+                        break
+                if conflict:
+                    break
+            if conflict:
+                warnings.append(
+                    f"subplot {si}: requested block ({r}:{end_r},{c}:{end_c}) overlaps existing subplot"
+                )
+                continue
+
+            # mark occupied
+            for ri in range(r, end_r):
+                for ci in range(c, end_c):
+                    occupied[ri][ci] = True
+
+            ax = fig.add_subplot(gs[r:end_r, c:end_c])
             for series in subplot.get('series', []):
                 try:
                     df = data

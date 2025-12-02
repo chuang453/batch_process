@@ -9,10 +9,14 @@ from decorators.processor import PROCESSORS, PRE_PROCESSORS, POST_PROCESSORS
 
 # import builtin modules (ensure they register their processors)
 from . import builtin_recorders
+from . import file_ops
+from . import plotting
 
 __all__ = [
     "PROCESSORS",
     "PRE_PROCESSORS",
     "POST_PROCESSORS",
     "builtin_recorders",
+    "file_ops",
+    "plotting",
 ]

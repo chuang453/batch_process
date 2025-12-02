@@ -42,7 +42,9 @@ def test_backup_file_processor(tmp_path):
     config = {
         "**/*.txt": {
             "processors": ["backup_file"],
-            "config": {"backup_dir": str(backup_root)}
+            "config": {
+                "backup_dir": str(backup_root)
+            }
         }
     }
 
@@ -56,7 +58,10 @@ def test_backup_file_processor(tmp_path):
     assert (backup_root / "example.txt").exists(), "backup file should exist"
 
     # engine stores results in context.results; find a backup result
-    backup_results = [r for r in context.results if r.get("processor") == "backup_file"]
+    backup_results = [
+        r for r in context.results if r.get("processor") == "backup_file"
+    ]
     assert backup_results, f"expected at least one backup_file result, got: {context.results}"
     res = backup_results[0]
-    assert res.get("result") and "to" in res["result"], "result record should include 'to' path"
+    assert res.get("result") and "to" in res[
+        "result"], "result record should include 'to' path"

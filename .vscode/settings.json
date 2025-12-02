@@ -3,5 +3,8 @@
   "python.testing.pytestArgs": ["${workspaceFolder}/test"],
   "python.testing.unittestEnabled": false,
   "python.testing.nosetestsEnabled": false,
-  "python.testing.autoTestDiscoverOnSaveEnabled": true
+  "python.testing.autoTestDiscoverOnSaveEnabled": true,
+  "python.defaultInterpreterPath": "D:\\miniconda\\envs\\gflow_env\\python.exe",
+  "python.terminal.activateEnvironment": true,
+  "git.path": "C:\\Program Files\\Git\\cmd\\git.exe"
 }
