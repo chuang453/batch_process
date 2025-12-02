@@ -26,7 +26,11 @@ def test_set_path_name_dict_parses_and_sets_labels_and_categories(tmp_path):
     ctx = ProcessingContext()
 
     # Act
-    res = set_path_name_dict(folder, ctx, _dict_file='_dict.txt', force=True, category_suffix='.cate')
+    res = set_path_name_dict(folder,
+                             ctx,
+                             _dict_file='_dict.txt',
+                             force=True,
+                             category_suffix='.cate')
 
     # Assert: parsing result
     assert res['status'] == 'success'
