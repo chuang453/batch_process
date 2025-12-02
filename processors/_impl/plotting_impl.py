@@ -1,4 +1,6 @@
 from pathlib import Path
+from typing import Callable, Optional, Tuple, Dict
+
 import pandas as pd
 import sqlite3
 import hashlib
@@ -152,14 +154,18 @@ def prepare_plot_data_impl(target: Path,
     }
 
 
-def plot_from_spec_impl(target: Path,
-                        *,
-                        data=None,
-                        spec: dict = None,
-                        out_dir: str = None,
-                        fmt: str = 'png',
-                        dpi: int = 150,
-                        base_style: dict = None) -> dict:
+def plot_from_spec_impl(
+    target: Path,
+    *,
+    data=None,
+    spec: dict = None,
+    out_dir: str = None,
+    fmt: str = 'png',
+    dpi: int = 150,
+    base_style: dict = None,
+    extract_f: Optional[Callable[[dict, Optional[pd.DataFrame], Path],
+                                 Optional[object]]] = None
+) -> dict:
     """Create plot(s) from a specification using the provided data.
 
     This function accepts a `spec` describing subplot layout, series and
@@ -251,6 +257,7 @@ def plot_from_spec_impl(target: Path,
     out_root.mkdir(parents=True, exist_ok=True)
 
     warnings = []
+    extract_meta = []
     try:
         layout = spec.get('layout', {})
         rows = int(layout.get('rows', 1))
@@ -334,9 +341,39 @@ def plot_from_spec_impl(target: Path,
             ax = fig.add_subplot(gs[r:end_r, c:end_c])
             for series in subplot.get('series', []):
                 try:
-                    df = data
-                    if series.get('data') is not None:
-                        df = pd.DataFrame(series.get('data'))
+                    # Determine data for this series. If an extractor is
+                    # provided, call it with (series, data, target). The
+                    # extractor may return a DataFrame or (DataFrame, meta).
+                    df_series = None
+                    meta = None
+                    if extract_f is not None:
+                        try:
+                            res = extract_f(series, data, target)
+                            if isinstance(res, tuple) and len(res) >= 1:
+                                df_series = res[0]
+                                try:
+                                    meta = res[1] if len(res) > 1 else None
+                                except Exception:
+                                    meta = None
+                                if meta is not None:
+                                    extract_meta.append({
+                                        'subplot_index':
+                                        si,
+                                        'series_label':
+                                        series.get('label'),
+                                        'meta':
+                                        meta
+                                    })
+                            else:
+                                df_series = res
+                        except Exception as ee:
+                            warnings.append(
+                                f"subplot {si} series extractor failed: {ee}")
+                            continue
+                    else:
+                        df_series = pd.DataFrame(
+                            series.get('data')) if series.get(
+                                'data') is not None else data
 
                     merged_series = dict(base_series_style)
                     if isinstance(series, dict):
@@ -355,33 +392,42 @@ def plot_from_spec_impl(target: Path,
                         if k in merged_series:
                             plot_kwargs[k] = merged_series[k]
 
-                    if df is None:
+                    if df_series is None:
                         warnings.append(f"series {label}: no data available")
                         continue
+
+                    # Ensure we have a DataFrame for indexing
+                    if not isinstance(df_series, pd.DataFrame):
+                        try:
+                            df_series = pd.DataFrame(df_series)
+                        except Exception:
+                            warnings.append(
+                                f"series {label}: invalid data format")
+                            continue
 
                     if isinstance(ycol, (list, tuple)):
                         for y in ycol:
                             if isinstance(style, str):
-                                ax.plot(df[xcol],
-                                        df[y],
+                                ax.plot(df_series[xcol],
+                                        df_series[y],
                                         style,
                                         label=f"{label}:{y}",
                                         **plot_kwargs)
                             else:
-                                ax.plot(df[xcol],
-                                        df[y],
+                                ax.plot(df_series[xcol],
+                                        df_series[y],
                                         label=f"{label}:{y}",
                                         **plot_kwargs)
                     else:
                         if isinstance(style, str):
-                            ax.plot(df[xcol],
-                                    df[ycol],
+                            ax.plot(df_series[xcol],
+                                    df_series[ycol],
                                     style,
                                     label=label,
                                     **plot_kwargs)
                         else:
-                            ax.plot(df[xcol],
-                                    df[ycol],
+                            ax.plot(df_series[xcol],
+                                    df_series[ycol],
                                     label=label,
                                     **plot_kwargs)
                 except Exception as e:
@@ -408,10 +454,13 @@ def plot_from_spec_impl(target: Path,
         fig.savefig(outpath, dpi=save_info.get('dpi', dpi), format=fmt)
         plt.close(fig)
 
-        return {
+        result = {
             "status": "success",
             "figure_path": str(outpath),
             "warnings": warnings
         }
+        if extract_meta:
+            result["extract_meta"] = extract_meta
+        return result
     except Exception as e:
         return {"status": "error", "error": str(e)}

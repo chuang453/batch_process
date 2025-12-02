@@ -284,7 +284,10 @@ def read_history_rows(log_dir: str, limit: Optional[int] = None):
             sql = sql + f" LIMIT {int(limit)}"
         cur.execute(sql)
         rows = cur.fetchall()
-        cols = ['id', 'ts', 'path', 'processor', 'phase', 'status', 'cfg', 'result', 'error', 'raw']
+        cols = [
+            'id', 'ts', 'path', 'processor', 'phase', 'status', 'cfg',
+            'result', 'error', 'raw'
+        ]
         out = []
         for r in rows:
             d = dict(zip(cols, r))
@@ -299,7 +302,10 @@ def read_history_rows(log_dir: str, limit: Optional[int] = None):
 
 
 @processor(name="persist_history_sqlite", priority=5)
-def persist_history_sqlite(path: Path, context: ProcessingContext, log_dir: str = "debug_logs", **kwargs) -> Any:
+def persist_history_sqlite(path: Path,
+                           context: ProcessingContext,
+                           log_dir: str = "debug_logs",
+                           **kwargs) -> Any:
     """Persist the most recent `context.results` entry (if any) to SQLite.
 
     This is the preferred name for the built-in persistence processor.
@@ -316,3 +322,49 @@ def persist_history_sqlite(path: Path, context: ProcessingContext, log_dir: str 
         }
     enqueue_persist(record, log_dir)
     return {'enqueued': True}
+
+
+@processor(name="write_plot_extract_summary", priority=5)
+def write_plot_extract_summary(path: Path,
+                               context: ProcessingContext,
+                               summary_dir: str = "debug_logs",
+                               as_json: bool = True,
+                               filename: str = None,
+                               **kwargs) -> Any:
+    """Downstream example processor: read `plot_extract_meta` from
+    `context.data` and write a small summary file (JSON by default).
+
+    Stores a result via `context.add_result` and returns a dict with
+    `summary_file` on success. If no meta is present returns a skipped
+    result.
+    """
+    try:
+        meta = context.get_data(['plot_extract_meta', str(path)])
+        if not meta:
+            return {'skipped': True, 'reason': 'no_plot_extract_meta'}
+
+        outdir = Path(summary_dir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        fname = filename or f"plot_extract_meta_{Path(path).name}.json"
+        outpath = outdir / fname
+
+        if as_json:
+            with open(outpath, 'w', encoding='utf-8') as fh:
+                json.dump(meta, fh, ensure_ascii=False, indent=2)
+        else:
+            with open(outpath, 'w', encoding='utf-8') as fh:
+                fh.write(str(meta))
+
+        result = {
+            'file': str(path),
+            'processor': 'write_plot_extract_summary',
+            'summary_file': str(outpath),
+            'status': 'written'
+        }
+        try:
+            context.add_result(result)
+        except Exception:
+            pass
+        return result
+    except Exception as e:
+        return {'error': str(e)}

@@ -128,6 +128,34 @@ def plot_on_exit_paste_word(dir_path, context):
 pip install python-docx matplotlib Pillow
 ```
 
+### Extractor 使用说明 (`extract_f`)
+
+- 目的：将“数据提取/过滤”逻辑与绘图渲染分离，便于复用、测试与缓存。
+- 协议：传入的 `extract_f(series, data, target)` 应返回其中之一：
+  - 直接返回可被 `pandas.DataFrame` 构造的对象（DataFrame-like），或
+  - 返回 `(df, meta)` 元组，其中 `meta` 为字典，包含诸如 `cache_key`、`rows`、`source` 等元信息。
+- 行为：`plot_from_spec_impl` 会收集每个 series 返回的 `meta` 并在函数结果中包含 `res['extract_meta']`（一个列表）。
+- 存储：`plot_from_spec` 处理器会把 `extract_meta` 转换为按系列标签（series label）键控的映射，并把该映射保存到处理上下文：
+  `context.data['plot_extract_meta'][str(target)]`，供下游处理器读取。
+- 下游使用示例（处理器中读取）：
+
+```python
+def my_downstream_proc(path, context, **cfg):
+    meta_map = context.get_data(['plot_extract_meta', str(path)])
+    if not meta_map:
+        return {'skipped': True}
+    # meta_map is { 'series_label': [meta_dict, ...], ... }
+    for label, metas in meta_map.items():
+        for m in metas:
+            print(label, m.get('cache_key'), m.get('rows'))
+    return {'processed': True}
+```
+
+Use `extract_f` when you need per-series filtering (grouping, DB queries,
+or cache lookups). Keep `extract_f` lightweight or add caching inside the
+closure for performance.
+
+
 以上示例与项目中的 `demos/demo3/plugins/word_plot_pipeline.py` 思路一致，适配器将与外部库的耦合集中管理，核心 `pipeline` 专注于上下文与数据聚合，便于在 GUI 的工作线程中稳定运行。
   - `processors/`、`plugins/`：内置与外部处理器
   - `cli/app.py`、`main_window.py`：命令行与图形界面入口

@@ -1,14 +1,34 @@
-from pathlib import Path
-from typing import Any, Dict, List
+﻿"""Plot helpers adapter: small convenience wrappers around the
+pure plotting implementation.
 
-def save_plot_png_values(values: List[float], out_path: Path, cfg: Dict[str, Any]) -> Path:
-    """Render values into a PNG. Prefer Agg; fallback to Pillow.
-    This adapter keeps plotting separate from core pipeline utils.
-    """
+This module exposes `plot_from_spec_adapter(..)` which forwards calls to
+`processors._impl.plotting_impl.plot_from_spec_impl` and accepts an
+optional `extract_f` callable identical to the processor-level API.
+
+Extractor protocol
+- `extract_f(series, data, target)` should return either a DataFrame
+    (or data convertible to pd.DataFrame) or `(df, meta)` where `meta` is
+    an arbitrary dict. The plotting implementation collects `meta` for
+    all series and returns it under `res['extract_meta']`.
+
+Storage
+- The `plot_from_spec` processor converts the returned `extract_meta`
+    list into a mapping keyed by series label and stores it at
+    `context.data['plot_extract_meta'][str(target)]` for downstream
+    processors to consume.
+"""
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Callable
+
+
+def save_plot_png_values(values: List[float], out_path: Path,
+                         cfg: Dict[str, Any]) -> Path:
     try:
         from matplotlib.figure import Figure
         from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-        fig = Figure(figsize=(cfg.get("fig_width", 4), cfg.get("fig_height", 3)), dpi=cfg.get("dpi", 100))
+        fig = Figure(figsize=(cfg.get("fig_width",
+                                      4), cfg.get("fig_height", 3)),
+                     dpi=cfg.get("dpi", 100))
         ax = fig.add_subplot(111)
         ax.plot(values, marker="o")
         ax.grid(True)
@@ -33,7 +53,8 @@ def save_plot_png_values(values: List[float], out_path: Path, cfg: Dict[str, Any
             x = margin + (i / max(1, len(values) - 1)) * plot_w
             y = margin + (1 - (v - vmin) / rng) * plot_h
             pts.append((x, y))
-        draw.rectangle([margin, margin, margin + plot_w, margin + plot_h], outline=(0, 0, 0))
+        draw.rectangle([margin, margin, margin + plot_w, margin + plot_h],
+                       outline=(0, 0, 0))
         if len(pts) > 1:
             draw.line(pts, fill=(30, 120, 200), width=2)
         for x, y in pts:
@@ -46,3 +67,52 @@ def save_plot_png_values(values: List[float], out_path: Path, cfg: Dict[str, Any
             draw.text((margin, 5), title, fill=(0, 0, 0))
         im.save(out_path)
         return out_path
+
+
+def prepare_plot_data_adapter(target: Path,
+                              *,
+                              cache_key: str = None,
+                              db_url: str = None,
+                              query: str = None,
+                              csv_path: str = None,
+                              data=None,
+                              to_disk: bool = False,
+                              force: bool = False,
+                              encoding: str = 'utf-8') -> Dict[str, Any]:
+    try:
+        from processors._impl.plotting_impl import prepare_plot_data_impl
+        return prepare_plot_data_impl(target,
+                                      cache_key=cache_key,
+                                      db_url=db_url,
+                                      query=query,
+                                      csv_path=csv_path,
+                                      data=data,
+                                      to_disk=to_disk,
+                                      force=force,
+                                      encoding=encoding)
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+def plot_from_spec_adapter(
+        target: Path,
+        *,
+        data=None,
+        spec: Dict[str, Any] = None,
+        out_dir: str = None,
+        fmt: str = 'png',
+        dpi: int = 150,
+        base_style: Dict[str, Any] = None,
+        extract_f: Optional[Callable] = None) -> Dict[str, Any]:
+    try:
+        from processors._impl.plotting_impl import plot_from_spec_impl
+        return plot_from_spec_impl(target,
+                                   data=data,
+                                   spec=spec,
+                                   out_dir=out_dir,
+                                   fmt=fmt,
+                                   dpi=dpi,
+                                   base_style=base_style,
+                                   extract_f=extract_f)
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
