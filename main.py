@@ -9,7 +9,7 @@ def run_pipeline(root: str, config_path: str, merge=True, engine="pandas"):
     config = load_config(config_path)
     load_plugins()
     print(f"📦 已加载的处理器：{PROCESSORS}")
-    bp = BatchProcessor(config, PROCESSORS)
+    bp = BatchProcessor(config)
     context = bp.run(root)
 
 #    df = results_to_dataframe(context.results, engine=engine)

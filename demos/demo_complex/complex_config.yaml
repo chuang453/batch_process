@@ -1,0 +1,36 @@
+# Complex Demo Configuration
+# 
+# This configuration demonstrates:
+# 1. Writing folder labels when entering directories
+# 2. Reading files with 3 types of data
+# 3. Creating individual plots for each file
+# 4. Writing summaries and comprehensive plots when exiting directories
+
+# Root directory processing
+".":
+  pre_processors:
+    - enter_folder_label
+  config:
+    doc_path: demos/demo_complex/output_complex.docx
+    img_dir: demos/demo_complex/images
+
+# All subdirectories
+"**/":
+  pre_processors:
+    - enter_folder_label
+  post_processors:
+    - exit_folder_summary
+  config:
+    doc_path: demos/demo_complex/output_complex.docx
+    img_dir: demos/demo_complex/images
+    fig_width: 6
+    fig_height: 4
+    dpi: 100
+
+# All text files
+"**/*.txt":
+  processors:
+    - read_three_type_data
+  config:
+    doc_path: demos/demo_complex/output_complex.docx
+    img_dir: demos/demo_complex/images
