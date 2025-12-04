@@ -1,9 +1,9 @@
 # gui.py
-from qtpy.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout,QGroupBox,QProgressBar,QSplitter,
-    QPushButton, QLineEdit, QLabel, QFileDialog, QTextEdit,QTableWidget, QTableWidgetItem,
-    QTabWidget,QHeaderView,QMessageBox, QTextBrowser, QDialog
-)
+from qtpy.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+                            QGroupBox, QProgressBar, QSplitter, QPushButton,
+                            QLineEdit, QLabel, QFileDialog, QTextEdit,
+                            QTableWidget, QTableWidgetItem, QTabWidget,
+                            QHeaderView, QMessageBox, QTextBrowser, QDialog)
 from qtpy.QtGui import QFont, QColor
 from qtpy.QtCore import QThread
 import html
@@ -22,9 +22,9 @@ STYLE = 'friendly'  # 试试 'vs' 或 'colorful' 看你喜欢哪个
 import pprint
 
 from core.engine import BatchProcessor
-from config.loader import load_config, generate_template   #AVAILABLE_PROCESSORS,
-from decorators.processor import ProcessingContext,PROCESSORS,PRE_PROCESSORS,POST_PROCESSORS,get_all_processors,_unregister_processor,_unregister_pre,_unregister_post
-from processors import *       ##导入内置处理函数
+from config.loader import load_config, generate_template  #AVAILABLE_PROCESSORS,
+from decorators.processor import ProcessingContext, PROCESSORS, PRE_PROCESSORS, POST_PROCESSORS, get_all_processors, _unregister_processor, _unregister_pre, _unregister_post
+from processors import *  ##导入内置处理函数
 from qtpy.QtGui import QTextCharFormat, QSyntaxHighlighter
 
 from widgets.widgets import FileStructureWidget
@@ -32,6 +32,7 @@ from widgets.console import PythonConsoleWidget
 from widgets.batch_thread import BatchWorker
 from datetime import datetime
 from enum import Enum
+import json
 
 from config.loader import _yaml_load, to_plain_dict, load_config, save_config, format_config_yaml
 
@@ -42,6 +43,7 @@ class LogLevel(Enum):
     WARNING = "warning"
     ERROR = "error"
     DEBUG = "debug"
+
 
 # 可选：定义颜色和图标
 LOG_STYLES = {
@@ -74,6 +76,7 @@ LOG_STYLES = {
 
 
 class YamlHighlighter(QSyntaxHighlighter):
+
     def __init__(self, document):
         super().__init__(document)
         self.formats = {}
@@ -104,22 +107,27 @@ class YamlHighlighter(QSyntaxHighlighter):
         # 匹配注释
         comment_start = text.find('#')
         if comment_start >= 0:
-            self.setFormat(comment_start, len(text) - comment_start, self.formats["comment"])
+            self.setFormat(comment_start,
+                           len(text) - comment_start, self.formats["comment"])
 
         # 匹配键（以冒号结尾）
         import re
         for match in re.finditer(r"^\s*([a-zA-Z0-9_\-]+)(\s*:)", text):
-            self.setFormat(match.start(1), len(match.group(1)), self.formats["key"])
+            self.setFormat(match.start(1), len(match.group(1)),
+                           self.formats["key"])
             # 冒号后的内容作为值
             if match.end(2) < len(text):
-                self.setFormat(match.end(2), len(text) - match.end(2), self.formats["value"])
+                self.setFormat(match.end(2),
+                               len(text) - match.end(2), self.formats["value"])
 
         # 布尔值/数字
         for match in re.finditer(r"\b(true|false|null|[\d\.]+)\b", text):
-            self.setFormat(match.start(), len(match.group()), self.formats["value"])
+            self.setFormat(match.start(), len(match.group()),
+                           self.formats["value"])
 
 
 class WriteStream:
+
     def __init__(self, text_edit):
         self.text_edit = text_edit
 
@@ -137,15 +145,16 @@ MAX_LOG_LINES = 1000  # 最大保留日志行数，防止内存爆炸
 
 
 class BatchProcessorGUI(QWidget):
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("批处理系统")
         self.resize(1100, 750)
         self.config_path = ""
         self.root_path = ""
-        
-        self.processor = BatchProcessor()    ##批处理器
-        self.context = ProcessingContext()   ##背景数据库
+
+        self.processor = BatchProcessor()  ##批处理器
+        self.context = ProcessingContext()  ##背景数据库
 
         # 主布局
         self.main_layout = QVBoxLayout()
@@ -164,28 +173,32 @@ class BatchProcessorGUI(QWidget):
 
         # 按钮行
         btn_layout = QHBoxLayout()
-   #     btn_load = QPushButton("🔄 加载配置")
-   #     btn_load.clicked.connect(self._load_config)
-   #     btn_refresh_plugin = QPushButton("🔄 刷新插件表")
-   #     btn_refresh_plugin.clicked.connect(self._refresh_plugin_table)
-   #     btn_plugins = QPushButton("🔌 加载插件")
-   #     btn_plugins.clicked.connect(self._load_plugins)
+        #     btn_load = QPushButton("🔄 加载配置")
+        #     btn_load.clicked.connect(self._load_config)
+        #     btn_refresh_plugin = QPushButton("🔄 刷新插件表")
+        #     btn_refresh_plugin.clicked.connect(self._refresh_plugin_table)
+        #     btn_plugins = QPushButton("🔌 加载插件")
+        #     btn_plugins.clicked.connect(self._load_plugins)
         self.btn_run = QPushButton("▶️ 开始处理")
         self.btn_run.setStyleSheet("font-weight: bold; color: green;")
         self.btn_run.clicked.connect(self._run_in_thread)
-        
+
         self.btn_cancel = QPushButton("❌ 中断处理")
         self.btn_cancel.setStyleSheet("font-weight: bold; color: green;")
         self.btn_cancel.clicked.connect(self._cancel)
-        self.btn_cancel.setEnabled(False)   ##初始禁用
-                
+        self.btn_cancel.setEnabled(False)  ##初始禁用
+
         btn_metadata = QPushButton("ℹ️ 显示执行情况(metadata)")
         btn_metadata.setStyleSheet("font-weight: bold")
         btn_metadata.clicked.connect(self._show_metadata_info)
-        
-        
-        for btn in [ self.btn_run, self.btn_cancel, btn_metadata]:  #btn_load btn_refresh_plugin, btn_plugins,
+        btn_preview = QPushButton("🔎 预览计划")
+        btn_preview.setStyleSheet("font-weight: bold")
+        btn_preview.clicked.connect(self._show_preview)
+
+        for btn in [self.btn_run, self.btn_cancel,
+                    btn_metadata]:  #btn_load btn_refresh_plugin, btn_plugins,
             btn_layout.addWidget(btn)
+        btn_layout.addWidget(btn_preview)
         path_layout.addLayout(btn_layout)
         path_group.setLayout(path_layout)
         self.main_layout.addWidget(path_group)
@@ -194,14 +207,14 @@ class BatchProcessorGUI(QWidget):
         main_splitter = QSplitter(Qt.Vertical)
         # --- 上半区：插件 + 配置（左右可调）---
         upper_splitter = QSplitter(Qt.Horizontal)
-        
+
         # 左侧：插件区域（内部垂直分割）
         plugin_widget = QWidget()
         plugin_layout = QVBoxLayout()
-        
+
         # 内部垂直分割器
         plugin_splitter = QSplitter(Qt.Vertical)
-        
+
         # 插件表格
         plugin_table_group = QGroupBox("🧩 已加载插件")
         table_layout = QVBoxLayout()
@@ -233,23 +246,24 @@ class BatchProcessorGUI(QWidget):
         # 插件说明
         self.plugin_info = QTextEdit()
         self.plugin_info.setReadOnly(True)
-        self.plugin_info.setStyleSheet("QTextEdit { background: #f4f8f4; border: none; }")
+        self.plugin_info.setStyleSheet(
+            "QTextEdit { background: #f4f8f4; border: none; }")
         plugin_info_group = QGroupBox("📌 插件说明")
         info_layout = QVBoxLayout()
         info_layout.addWidget(self.plugin_info)
         plugin_info_group.setLayout(info_layout)
-        
+
         # 将 GroupBox 添加到垂直分割器
         plugin_splitter.addWidget(plugin_table_group)
         plugin_splitter.addWidget(plugin_info_group)
-        
+
         # 设置初始大小比例
         plugin_splitter.setSizes([300, 100])
-        
+
         # 设置左侧整体布局
         plugin_layout.addWidget(plugin_splitter)
         plugin_widget.setLayout(plugin_layout)
-        
+
         # 添加到上半区水平分割器
         upper_splitter.addWidget(plugin_widget)
 
@@ -292,7 +306,7 @@ class BatchProcessorGUI(QWidget):
         upper_splitter.setSizes([400, 700])
         main_splitter.addWidget(upper_splitter)
 
-    #    # --- 下半区：日志与结果 Tab ---
+        #    # --- 下半区：日志与结果 Tab ---
         tab_widget = QTabWidget()
 
         # 初始化日志控件
@@ -301,17 +315,20 @@ class BatchProcessorGUI(QWidget):
         self._setup_logging()  ##日志
 
         ## 控制台
-        locals_dict = {'batch_processor': self.processor,
-                       'context': self.context,
-                   #    'config_path': self.config_path,
-                   #    'root_path': self.root_path,
-                       'get_config_path': lambda: self.config_path,
-                       'get_root_path': lambda: self.root_path,
-                       'pre_processors': PRE_PROCESSORS,
-                       'processors': PROCESSORS,
-                       'post_processors': POST_PROCESSORS}
-        self.console = PythonConsoleWidget( parent=self, locals_dict = locals_dict) 
-        tab_widget.addTab(self.console,  '💻 控制台')
+        locals_dict = {
+            'batch_processor': self.processor,
+            'context': self.context,
+            #    'config_path': self.config_path,
+            #    'root_path': self.root_path,
+            'get_config_path': lambda: self.config_path,
+            'get_root_path': lambda: self.root_path,
+            'pre_processors': PRE_PROCESSORS,
+            'processors': PROCESSORS,
+            'post_processors': POST_PROCESSORS
+        }
+        self.console = PythonConsoleWidget(parent=self,
+                                           locals_dict=locals_dict)
+        tab_widget.addTab(self.console, '💻 控制台')
 
         self.results_table = QTableWidget()
         self.results_table.verticalHeader().setVisible(False)
@@ -472,12 +489,12 @@ class BatchProcessorGUI(QWidget):
         except Exception as e:
             self._log(f"❌ 无法格式化，语法错误: {e}")
 
-   ##输出config字典
+##输出config字典
+
     def _print_config(self):
-        config_ss = pprint.pformat(self.config, indent = 2, width = 40)
+        config_ss = pprint.pformat(self.config, indent=2, width=40)
         config_ss = '配置文件如下：\n' + config_ss
         self._log(config_ss, level=LogLevel.INFO)
-
 
     def _run(self):
         if not hasattr(self, 'config'):
@@ -491,10 +508,10 @@ class BatchProcessorGUI(QWidget):
             return
 
         try:
-        #    self.processor = BatchProcessor(self.config)  #, AVAILABLE_PROCESSORS
+            #    self.processor = BatchProcessor(self.config)  #, AVAILABLE_PROCESSORS
             self.processor.set_config(self.config)
             self._log(f"✅ 批处理器构建完毕!")
-            processor = self.processor 
+            processor = self.processor
 
             # 设置进度回调
             def progress_callback(current, total, status="处理中"):
@@ -513,7 +530,7 @@ class BatchProcessorGUI(QWidget):
             processor.run(self.root_path, self.context)
             self._log(f"✅ 批处理完毕!")
             sys.stdout = old_stdout
-#            self._log(captured_output.getvalue())
+            #            self._log(captured_output.getvalue())
             self.progress_bar.setFormat("完成")
             self._show_results(self.context.results)  # 显示结果
         except Exception as e:
@@ -521,7 +538,7 @@ class BatchProcessorGUI(QWidget):
 
         self._show_results(self.context.results)
 
-     #新开一个线程运行程序
+    #新开一个线程运行程序
     def _run_in_thread(self):
         # 清空上下文，避免旧数据污染
         self.context.clear()  # 需要在 ProcessingContext 中实现 clear()
@@ -537,7 +554,8 @@ class BatchProcessorGUI(QWidget):
 
         # ✅ 获取用户启用的插件
         try:
-            pre_proc, main_proc, post_proc = self._get_enabled_processors_from_table()
+            pre_proc, main_proc, post_proc = self._get_enabled_processors_from_table(
+            )
         except Exception as e:
             self._log(f"❌ 获取启用插件失败: {e}", level=LogLevel.ERROR)
             return
@@ -547,8 +565,12 @@ class BatchProcessorGUI(QWidget):
         self.btn_cancel.setEnabled(True)  # 如果有取消按钮
         # ✅ 关键：注入用户选择的处理器
         self.processor.set_config(self.config)
-        self.processor.set_processors(pre=pre_proc, main=main_proc, post=post_proc)
-        self._log(f"✅ 批处理器构建完毕!启用插件: {len(pre_proc)+len(main_proc)+len(post_proc)} 个")
+        self.processor.set_processors(pre=pre_proc,
+                                      main=main_proc,
+                                      post=post_proc)
+        self._log(
+            f"✅ 批处理器构建完毕!启用插件: {len(pre_proc)+len(main_proc)+len(post_proc)} 个"
+        )
 
         # 设置进度回调
         def progress_callback(current, total, status="处理中"):
@@ -583,20 +605,17 @@ class BatchProcessorGUI(QWidget):
             self._log("🛑 正在请求取消批处理，请稍候...")
             self.btn_cancel.setEnabled(False)  # 防止重复点击
 
-
     def _on_progress(self, current, total, status):
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(current)
         self.progress_bar.setFormat(f"{status} [{current}/{total}]")
-    
+
     def _on_worker_finished(self, context):
         self._log("✅ 批处理完成！")
         self.progress_bar.setFormat("完成")
         self._show_results(context.results)
         self.btn_run.setEnabled(True)
         self.btn_cancel.setEnabled(False)
-
-
 
     ##程序执行后， 显示metadata
     def _show_metadata_info(self):
@@ -610,7 +629,7 @@ class BatchProcessorGUI(QWidget):
         colnames = context.meta_colnames
         metadata = context.metadata
 
-       ##显示
+        ##显示
         dialog = QDialog(self)
         dialog.setWindowTitle(" metadata")
         dialog.resize(800, 600)
@@ -623,10 +642,112 @@ class BatchProcessorGUI(QWidget):
             QMessageBox.critical(dialog, "错误", f"加载元数据失败：{str(e)}")
             dialog.close()
             return
-    
+
         dialog.exec_()  # 显示对话框（模态）
 
+    def _show_preview(self):
+        """Show a preview plan (dry-run) for the configured root path."""
+        root = self.root_line.text().strip() if hasattr(
+            self, 'root_line') else self.root_path
+        if not root:
+            QMessageBox.warning(self, "警告", "请先在目标目录中选择或填写要预览的根路径。")
+            return
 
+        try:
+            # ensure processor has the currently loaded config
+            if hasattr(self, 'config') and self.config:
+                try:
+                    self.processor.set_config(self.config)
+                except Exception:
+                    pass
+
+            actions = self.processor.simulate(root, max_items=1000)
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"预览失败: {e}")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("🔎 预览计划 (Dry-run)")
+        dialog.resize(900, 600)
+        layout = QVBoxLayout(dialog)
+
+        # Build a nested dict suitable for FileStructureWidget:
+        # structure: { 'name/': { ... }, 'name': [col1, col2, col3], ... }
+        def build_tree(actions_list):
+            root_dict = {}
+
+            for a in actions_list:
+                path = a.get('path', '.')
+                parts = [] if path in ('.', '') else path.split('/')
+                cur = root_dict
+
+                for i, part in enumerate(parts):
+                    is_last = (i == len(parts) - 1)
+                    if is_last:
+                        # leaf (file or dir)
+                        cols = []
+                        pre = ', '.join(
+                            [p['name'] for p in a.get('pre_processors', [])])
+                        proc = ', '.join(
+                            [p['name'] for p in a.get('processors', [])])
+                        post = ', '.join(
+                            [p['name'] for p in a.get('post_processors', [])])
+                        cols = [pre, proc, post]
+
+                        if a.get('is_dir'):
+                            # ensure folder container
+                            folder_key = part + '/'
+                            if folder_key not in cur:
+                                cur[folder_key] = {}
+                            # set attribute for folder name
+                            cur[part] = cols
+                            # descend into folder dict for children
+                            cur = cur[folder_key]
+                        else:
+                            cur[part] = cols
+                    else:
+                        # intermediate folder: ensure both 'name/' and placeholder
+                        folder_key = part + '/'
+                        if folder_key not in cur:
+                            cur[folder_key] = {}
+                        if part not in cur:
+                            cur[part] = ["", "", ""]
+                        cur = cur[folder_key]
+
+                # special-case root entry when path == '.'
+                if not parts:
+                    pre = ', '.join(
+                        [p['name'] for p in a.get('pre_processors', [])])
+                    proc = ', '.join(
+                        [p['name'] for p in a.get('processors', [])])
+                    post = ', '.join(
+                        [p['name'] for p in a.get('post_processors', [])])
+                    root_dict['.'] = [pre, proc, post]
+
+            return root_dict
+
+        tree_data = build_tree(actions)
+
+        try:
+            file_widget = FileStructureWidget(
+                tree_data, column_names=['Pre', 'Processors', 'Post'])
+            layout.addWidget(file_widget)
+        except Exception:
+            # fallback to raw JSON if tree fails
+            txt = QTextEdit()
+            txt.setReadOnly(True)
+            try:
+                pretty = json.dumps(actions, ensure_ascii=False, indent=2)
+            except Exception:
+                pretty = str(actions)
+            txt.setPlainText(pretty)
+            layout.addWidget(txt)
+
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(dialog.accept)
+        layout.addWidget(btn_close)
+
+        dialog.exec_()
 
     def _gen_template(self):
         path, _ = QFileDialog.getSaveFileName(self, "保存模板", "config.yaml",
@@ -635,11 +756,10 @@ class BatchProcessorGUI(QWidget):
             generate_template(path)
             self._log(f"✅ 模板已生成: {path}")
 
-
     ##日志设置
     def _setup_logging(self):
         """设置日志区域"""
-    #    self.log = QTextBrowser()
+        #    self.log = QTextBrowser()
         self.log.setOpenExternalLinks(True)  # 可选：支持链接
         self.log.setReadOnly(True)
         self.log.setStyleSheet("""
@@ -667,8 +787,8 @@ class BatchProcessorGUI(QWidget):
         label = style["label"]
 
         # 转义并处理多行文本
-    #    safe_text = escape(str(text)).strip()
-    #    lines = safe_text.split('\n')
+        #    safe_text = escape(str(text)).strip()
+        #    lines = safe_text.split('\n')
         lines = text.split('\n')
         html_lines = []
         for i, line in enumerate(lines):
@@ -680,8 +800,7 @@ class BatchProcessorGUI(QWidget):
                 formatted = (
                     f"<span style='color: #888; font-family: monospace;'>[{timestamp}]</span>&nbsp;"
                     f"<b style='color: white;'>{icon} {label}</b>&nbsp;"
-                    f"<span style='color: {color};'>{line}</span>"
-                )
+                    f"<span style='color: {color};'>{line}</span>")
             else:
                 # 后续行缩进
                 formatted = f"&nbsp;&nbsp;&nbsp;&nbsp;{line}"
@@ -730,8 +849,8 @@ class BatchProcessorGUI(QWidget):
 #        self.log.ensureCursorVisible()
 #        self.log.moveCursor(self.log.textCursor().End)
 
+# 方法
 
-    # 方法
     def _clear_log(self):
         self.log.clear()
         self._log("日志已清空", level=LogLevel.INFO)
@@ -841,9 +960,9 @@ class BatchProcessorGUI(QWidget):
         pre_enabled = {}
         main_enabled = {}
         post_enabled = {}
-    
+
         all_processors = {**PRE_PROCESSORS, **PROCESSORS, **POST_PROCESSORS}
-    
+
         for row in range(self.plugin_table.rowCount()):
             cb_item = self.plugin_table.item(row, 1)  # 启用列
 
@@ -852,7 +971,8 @@ class BatchProcessorGUI(QWidget):
             func_name = cb_item.data(Qt.UserRole)
             if not func_name or func_name not in all_processors:
                 continue
-            if cb_item.checkState() == Qt.Checked and func_name in all_processors:
+            if cb_item.checkState(
+            ) == Qt.Checked and func_name in all_processors:
                 func = all_processors[func_name]
                 ptype = getattr(func, 'processor_kind', 'file')
                 if ptype == 'pre':
@@ -861,9 +981,9 @@ class BatchProcessorGUI(QWidget):
                     post_enabled[func_name] = func
                 else:
                     main_enabled[func_name] = func
-    
+
         return pre_enabled, main_enabled, post_enabled
-    
+
     ##刷新可用的处理函数表格
     def _refresh_plugin_table(self):
 
@@ -881,11 +1001,10 @@ class BatchProcessorGUI(QWidget):
         # 添加到表格
         try:
             # keep deterministic order (kind, priority, name) for stable UI
-            items = sorted(all_processors.items(), key=lambda kv: (
-                getattr(kv[1], 'processor_kind', ''),
-                -getattr(kv[1], 'processor_priority', 0),
-                kv[0]
-            ))
+            items = sorted(all_processors.items(),
+                           key=lambda kv:
+                           (getattr(kv[1], 'processor_kind', ''), -getattr(
+                               kv[1], 'processor_priority', 0), kv[0]))
         except Exception:
             items = list(all_processors.items())
 
@@ -895,7 +1014,7 @@ class BatchProcessorGUI(QWidget):
             # 文件名
             self.plugin_table.setItem(
                 row, 0, QTableWidgetItem(str(func.processor_source)))
-            
+
             # metadata must be read up-front (was previously used before declaration)
             meta = getattr(func, 'metadata', {})
             # 👇 恢复勾选状态，若无则默认 False
@@ -908,10 +1027,10 @@ class BatchProcessorGUI(QWidget):
             self.plugin_table.setItem(row, 1, cb)
 
             # 启用复选框
-#            cb = QTableWidgetItem()
-#            cb.setCheckState(Qt.Checked)
-#            cb.setData(Qt.UserRole, func.processor_name)  # 存名字
-#            self.plugin_table.setItem(row, 1, cb)            
+            #            cb = QTableWidgetItem()
+            #            cb.setCheckState(Qt.Checked)
+            #            cb.setData(Qt.UserRole, func.processor_name)  # 存名字
+            #            self.plugin_table.setItem(row, 1, cb)
             # 处理器名
             self.plugin_table.setItem(row, 2,
                                       QTableWidgetItem(func.processor_name))
@@ -955,11 +1074,10 @@ class BatchProcessorGUI(QWidget):
         header.setSortIndicator(logicalIndex, new_order)
         self.plugin_table.sortItems(logicalIndex, new_order)
 
-
     def _on_plugin_selected(self, row, col):
         cb_item = self.plugin_table.item(row, 1)
- #       if not hasattr(cb_item, 'plugin_func'):
- #           return
+        #       if not hasattr(cb_item, 'plugin_func'):
+        #           return
 
         func_name = cb_item.data(Qt.UserRole)
         all_processsors = PRE_PROCESSORS | PROCESSORS | POST_PROCESSORS
@@ -994,7 +1112,6 @@ class BatchProcessorGUI(QWidget):
             f"<b>标签:</b> {safe_str(tags)}")
 
         self.plugin_info.setHtml(doc)
-
 
     def _load_plugins(self):
         from pathlib import Path
@@ -1037,17 +1154,17 @@ class BatchProcessorGUI(QWidget):
                 continue
             try:
                 module_name = f"plugin_ext_{pyfile.stem}"
-            #   spec = spec_from_file_location(module_name, pyfile)
+                #   spec = spec_from_file_location(module_name, pyfile)
                 # 1. 如果已存在，从 sys.modules 中移除
                 if module_name in sys.modules:
                     print(f"🗑️ 移除旧模块: {module_name}")
                     del sys.modules[module_name]
-            
+
                 # 2. 正常导入流程
                 spec = spec_from_file_location(module_name, pyfile)
                 if spec is None:
                     raise ImportError(f"无法加载模块: {pyfile}")
-            
+
                 module = module_from_spec(spec)
                 sys.modules[module_name] = module
                 print(f"✅ 重新导入模块: {module_name}")
@@ -1097,11 +1214,8 @@ class BatchProcessorGUI(QWidget):
         for k, v in PROCESSORS.items():
             print(f"  {k} -> type={type(v).__name__}, callable={callable(v)}")
 
-
-
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = BatchProcessorGUI()   #BatchProcessorGUI()
+    window = BatchProcessorGUI()  #BatchProcessorGUI()
     window.show()
     sys.exit(app.exec())

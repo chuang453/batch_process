@@ -160,6 +160,82 @@ class BatchProcessor:
 
         return context
 
+    def simulate(self,
+                 root_path: str | Path,
+                 max_items: int | None = None,
+                 pattern_filter: str | None = None) -> List[Dict]:
+        """Produce a dry-run plan for the given root_path.
+
+        Returns a list of action dicts describing which processors would
+        run for each file/dir. This does NOT execute any processors.
+
+        Parameters:
+          - root_path: path to simulate
+          - max_items: optional cap on number of entries returned
+          - pattern_filter: optional substring to filter returned paths
+        """
+        root = Path(root_path)
+        if not root.exists():
+            raise FileNotFoundError(f"路径不存在: {root}")
+
+        self.root_path = root
+
+        actions: List[Dict] = []
+
+        def _walk(p: Path):
+            nonlocal actions
+            is_dir = p.is_dir()
+            rules = self._get_processors_for_path(p, is_dir)
+
+            # build action record
+            rel = None
+            try:
+                rel = p.relative_to(self.root_path).as_posix()
+            except Exception:
+                rel = str(p)
+
+            action = {
+                "path":
+                rel if rel != "" else ".",
+                "is_dir":
+                is_dir,
+                "pre_processors": [{
+                    "name": n,
+                    "config": c
+                } for n, c in rules.get("pre", [])],
+                "processors": [{
+                    "name": n,
+                    "config": c
+                } for n, c in rules.get("inline", [])],
+                "post_processors": [{
+                    "name": n,
+                    "config": c
+                } for n, c in rules.get("post", [])],
+            }
+
+            # optional filter
+            if pattern_filter:
+                if pattern_filter in action["path"]:
+                    actions.append(action)
+            else:
+                actions.append(action)
+
+            # early stop
+            if max_items is not None and len(actions) >= max_items:
+                return
+
+            if is_dir:
+                try:
+                    for child in sorted(p.iterdir()):
+                        if max_items is not None and len(actions) >= max_items:
+                            return
+                        _walk(child)
+                except (PermissionError, OSError):
+                    pass
+
+        _walk(root)
+        return actions
+
     # ==================== PRIVATE HELPERS ====================
 
     def _count_total_processor_calls(self, root: Path) -> int:
@@ -275,7 +351,8 @@ class BatchProcessor:
                 if persist_name and persist_name in self._processors:
                     names = [n for n, _ in result.get('post', [])]
                     if persist_name not in names:
-                        result.setdefault('post', []).append((persist_name, {}))
+                        result.setdefault('post', []).append(
+                            (persist_name, {}))
         except Exception:
             # non-fatal: misconfiguration should not break rule matching
             pass
@@ -350,7 +427,7 @@ class BatchProcessor:
                     # by optional recorders; do not auto-add here.
                     metadata_info[2].append('failed')
                     metadata_info[4].append(error_msg)
-                    
+
             else:
                 warn_msg = f"{proc_name}: 未注册处理器"
                 print(f"⚠️ {warn_msg}")

@@ -116,3 +116,159 @@ def plot_from_spec_adapter(
                                    extract_f=extract_f)
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from typing import Callable, Any, Dict, List, Optional, Tuple, Union
+
+
+def generic_plot(extract_f: Callable[[Any], List[float]],
+                 plot_spec: Dict[str, Any],
+                 plot_style: Optional[Dict[str, Any]] = None):
+    """
+    通用绘图函数。
+    
+    Parameters:
+    ----------
+    extract_f : callable
+        闭包函数，接受 param，返回一维数据列表（x 或 y）。
+        示例: extract_f(('sheet0', 'col2')) -> [1.2, 3.4, ...]
+    
+    plot_spec : dict
+        {
+            "subplots": [
+                {
+                    "pos": (nrows, ncols, index) OR (row, col) for subplot2grid,
+                    "title": str (optional),
+                    "xlabel": str (optional),
+                    "ylabel": str (optional),
+                    "lines": [
+                        {
+                            "x": x_param,
+                            "y": [y_param, label_str, style_dict]
+                        },
+                        ...
+                    ]
+                },
+                ...
+            ],
+            "save_path": str (optional)
+        }
+    
+    plot_style : dict (optional)
+        {
+            "figsize": (w, h),
+            "grid": bool,
+            "tight_layout": bool,
+            "dpi": int
+        }
+
+  "pos"这个参数有2种格式：标准格式  (nrows, ncols, index) → 自动均匀划分                                      (2, 2, 1)
+                                        扩展格式  (nrows, ncols, (r_start, r_end, c_start, c_end)) → 手动指定区域   (2, 2, (0, 2, 0, 1))
+    """
+
+    # 默认样式
+    default_style = {
+        "figsize": (10, 8),
+        "grid": False,
+        "dpi": 100,
+        "tight_layout": True
+    }
+    if plot_style:
+        default_style.update(plot_style)
+
+    fig = plt.figure(figsize=default_style["figsize"])
+
+    subplots = plot_spec["subplots"]
+
+    # === 自动推断全局 GridSpec 大小 ===
+    max_rows, max_cols = 1, 1
+    for sp in subplots:
+        pos = sp["pos"]
+        if len(pos) == 3:
+            nrows, ncols = pos[0], pos[1]
+        else:
+            raise ValueError(
+                "`pos` must be (nrows, ncols, index) or (nrows, ncols, (r0,r1,c0,c1))"
+            )
+        max_rows = max(max_rows, nrows)
+        max_cols = max(max_cols, ncols)
+
+    # 创建统一的 GridSpec（基于最大行列数）
+    gs = gridspec.GridSpec(max_rows, max_cols, figure=fig)
+
+    # === 绘制每个子图 ===
+    for idx, sp in enumerate(subplots):  # 修复了这里的一个错误
+        pos = sp["pos"]
+        nrows, ncols = pos[0], pos[1]
+
+        if isinstance(pos[2], int):
+            # 标准格式: (nrows, ncols, index)
+            index = pos[2] - 1  # MATLAB-style 1-based → 0-based
+            if index < 0:
+                raise ValueError("Subplot index must be >= 1")
+            r = index // ncols
+            c = index % ncols
+            ax = fig.add_subplot(gs[r, c])
+        elif isinstance(pos[2], (tuple, list)) and len(pos[2]) == 4:
+            # 扩展格式: (nrows, ncols, (r0, r1, c0, c1))
+            r0, r1, c0, c1 = pos[2]
+            ax = fig.add_subplot(gs[r0:r1, c0:c1])
+        else:
+            raise ValueError("`pos[2]` must be an int (MATLAB-style index) "
+                             "or a 4-tuple (r0, r1, c0, c1) for spanning.")
+
+        # --- 设置标题、标签 ---
+        if "title" in sp:
+            ax.set_title(sp["title"])
+        if "xlabel" in sp:
+            ax.set_xlabel(sp["xlabel"])
+        if "ylabel" in sp:
+            ax.set_ylabel(sp["ylabel"])
+
+        # --- 绘制线条 ---
+        for line in sp.get("lines", []):  # 修正了这里的获取方式
+            x_param = line["x"]
+            y_info = line["y"]
+
+            if len(y_info) == 1:
+                y_param, label, style = y_info[0], "", {}
+            elif len(y_info) == 2:
+                y_param, label = y_info
+                style = {}
+            elif len(y_info) == 3:
+                y_param, label, style = y_info
+            else:
+                raise ValueError(
+                    "y must be [y_param] or [y_param, label] or [y_param, label, style]"
+                )
+
+            try:
+                x_data = extract_f(x_param)
+                y_data = extract_f(y_param)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Data extraction failed for {x_param}/{y_param}: {e}")
+
+            if len(x_data) != len(y_data):
+                raise ValueError(
+                    f"x/y length mismatch: {len(x_data)} vs {len(y_data)}")
+
+            ax.plot(x_data, y_data, label=label, **style)
+
+        if any(len(line["y"]) > 1 for line in sp.get("lines", [])):
+            ax.legend()
+
+        if default_style["grid"]:
+            ax.grid(True)
+
+    if default_style["tight_layout"]:
+        plt.tight_layout()
+
+    if "save_path" in plot_spec:
+        plt.savefig(plot_spec["save_path"],
+                    dpi=default_style["dpi"],
+                    bbox_inches='tight')
+
+    plt.show()
