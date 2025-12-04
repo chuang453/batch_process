@@ -118,9 +118,32 @@ def plot_from_spec_adapter(
         return {"status": "error", "error": str(e)}
 
 
+import math
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from typing import Callable, Any, Dict, List, Optional, Tuple, Union
+from matplotlib import font_manager
+
+
+def get_chinese_font():
+    """返回一个可用的中文字体名称"""
+    chinese_fonts = [
+        'SimHei', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB',
+        'STHeiti', 'WenQuanYi Micro Hei'
+    ]
+    available_fonts = set(f.name for f in font_manager.fontManager.ttflist)
+    for font in chinese_fonts:
+        if font in available_fonts:
+            return font
+    return None  # 无中文字体
+
+
+font = get_chinese_font()
+if font:
+    plt.rcParams['font.sans-serif'] = [font, 'DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = False
+else:
+    print("警告：未找到中文字体，中文可能显示为方框")
 
 
 def generic_plot(extract_f: Callable[[Any], List[float]],
@@ -173,7 +196,11 @@ def generic_plot(extract_f: Callable[[Any], List[float]],
         "figsize": (10, 8),
         "grid": False,
         "dpi": 100,
-        "tight_layout": True
+        "tight_layout": True,
+        # legend handling defaults
+        "legend_threshold": 8,  # if > threshold, place legend outside
+        "legend_ncol_max": 4,
+        "legend_fontsize": 8
     }
     if plot_style:
         default_style.update(plot_style)
@@ -257,8 +284,29 @@ def generic_plot(extract_f: Callable[[Any], List[float]],
 
             ax.plot(x_data, y_data, label=label, **style)
 
-        if any(len(line["y"]) > 1 for line in sp.get("lines", [])):
-            ax.legend()
+        # handle legend intelligently: if many labels, place legend outside
+        handles, labels = ax.get_legend_handles_labels()
+        nlabels = len(labels)
+        if nlabels:
+            legend_threshold = default_style.get("legend_threshold", 8)
+            if nlabels > legend_threshold:
+                # choose number of columns to reduce legend height
+                ncol = min(default_style.get("legend_ncol_max", 4),
+                           max(1, math.ceil(nlabels / legend_threshold)))
+                ax.legend(handles,
+                          labels,
+                          ncol=ncol,
+                          bbox_to_anchor=(1.02, 1),
+                          loc='upper left',
+                          fontsize=default_style.get("legend_fontsize", 8),
+                          markerscale=0.8)
+                # make room on the right for the legend
+                try:
+                    fig.subplots_adjust(right=0.78)
+                except Exception:
+                    pass
+            else:
+                ax.legend()
 
         if default_style["grid"]:
             ax.grid(True)
@@ -267,8 +315,15 @@ def generic_plot(extract_f: Callable[[Any], List[float]],
         plt.tight_layout()
 
     if "save_path" in plot_spec:
+        #        # Save to file when requested (non-blocking)
         plt.savefig(plot_spec["save_path"],
                     dpi=default_style["dpi"],
                     bbox_inches='tight')
 
-    plt.show()
+    # IMPORTANT: do NOT call `plt.show()` here — that will open an
+    # interactive window and block the Qt event loop when called from
+    # a worker thread. Instead, close the figure to free resources.
+    try:
+        plt.close(fig)
+    except Exception:
+        pass
