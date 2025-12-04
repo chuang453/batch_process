@@ -5,12 +5,13 @@ from qtpy.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                             QTableWidget, QTableWidgetItem, QTabWidget,
                             QHeaderView, QMessageBox, QTextBrowser, QDialog,
                             QAbstractItemView)
-from qtpy.QtGui import QFont, QColor
+from qtpy.QtGui import QFont, QColor, QBrush
 from qtpy.QtCore import QThread
 import html
 import pandas as pd
 from qtpy.QtCore import Qt
 import sys
+import re
 ###yaml
 import yaml
 from pygments import highlight
@@ -755,9 +756,9 @@ class BatchProcessorGUI(QWidget):
         exec_tab = QWidget()
         exec_layout = QVBoxLayout()
         exec_table = QTableWidget()
-        exec_table.setColumnCount(6)
+        exec_table.setColumnCount(7)
         exec_table.setHorizontalHeaderLabels(
-            ['Step', 'Phase', 'Path', 'IsDir', 'Processor', 'Config'])
+            ['Step', 'Phase', 'Level', 'Path', 'IsDir', 'Processor', 'Config'])
         # Make table read-only (no in-place edits) and selectable by row
         exec_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         exec_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -777,19 +778,69 @@ class BatchProcessorGUI(QWidget):
             steps = seq.get('steps', []) if isinstance(seq, dict) else []
             exec_table.setRowCount(len(steps))
             for i, s in enumerate(steps):
+                # Step and phase
                 exec_table.setItem(i, 0, QTableWidgetItem(str(s.get('step'))))
                 exec_table.setItem(i, 1, QTableWidgetItem(s.get('phase', '')))
-                exec_table.setItem(i, 2, QTableWidgetItem(s.get('path', '')))
-                exec_table.setItem(i, 3,
-                                   QTableWidgetItem(str(s.get('is_dir'))))
+
+                # Compute level (depth) from path string
+                path_raw = s.get('path', '') or ''
+                if path_raw in ('.', ''):
+                    level = 0
+                    display_name = '.'
+                else:
+                    parts = [p for p in re.split(r"[\\/]+", path_raw) if p]
+                    level = max(0, len(parts) - 1)
+                    display_name = parts[-1] if parts else path_raw
+
+                # Level column (numeric)
+                lvl_item = QTableWidgetItem(str(level))
+                lvl_item.setTextAlignment(Qt.AlignCenter)
+                exec_table.setItem(i, 2, lvl_item)
+
+                # Path column: show tree-style prefix and emoji icon, full path in tooltip
+                # Build tree prefix: use '│   ' for intermediate levels and '└─ ' for the final branch
+                if level <= 0:
+                    prefix = ''
+                else:
+                    parts_prefix = []
+                    for d in range(level):
+                        if d < level - 1:
+                            parts_prefix.append('│   ')
+                        else:
+                            parts_prefix.append('└─ ')
+                    prefix = ''.join(parts_prefix)
+
+                # Emoji icon for folder/file
+                is_dir = bool(s.get('is_dir'))
+                icon = '📁 ' if is_dir else '📄 '
+
+                path_item = QTableWidgetItem(f"{prefix}{icon}{display_name}")
+                path_item.setToolTip(path_raw)
+                exec_table.setItem(i, 3, path_item)
+
+                # IsDir and processor
                 exec_table.setItem(i, 4,
+                                   QTableWidgetItem(str(s.get('is_dir'))))
+                exec_table.setItem(i, 5,
                                    QTableWidgetItem(s.get('proc_name', '')))
+
                 try:
                     cfg_text = json.dumps(s.get('config', {}),
                                           ensure_ascii=False)
                 except Exception:
                     cfg_text = str(s.get('config', ''))
-                exec_table.setItem(i, 5, QTableWidgetItem(cfg_text))
+                exec_table.setItem(i, 6, QTableWidgetItem(cfg_text))
+
+                # Row shading by depth to enhance hierarchy perception
+                if level % 2 == 1:
+                    shade = QBrush(QColor(250, 250, 250))
+                else:
+                    shade = None
+                if shade is not None:
+                    for col in range(exec_table.columnCount()):
+                        item = exec_table.item(i, col)
+                        if item is not None:
+                            item.setBackground(shade)
         except Exception:
             pass
 
