@@ -317,6 +317,16 @@ GUI 要点
   - 选择插件目录后“加载插件”，动态导入模块并注册处理器
   - “刷新插件表”保持当前勾选状态与排序
 
+**执行预览与运行状态**
+
+- **合并预览/执行**：GUI 的执行顺序预览（Execution-order）与运行时执行状态已合并到同一表格，预览显示由 `BatchProcessor.simulate(..., sequence=True)` 生成的步骤序列。表格包含常见列：`Step`, `Phase`, `Level`, `Path`, `IsDir`, `Processor`, `Status`, `Error`, `Config`。
+- **表格行为**：表格为只读，避免误编辑；同时允许用户自由调整列宽与移动列顺序以便自定义视图。`Path` 列采用树形缩进（`├─` / `└─`）并在目录/文件前显示简易 emoji 图标以增强可读性。
+- **层级折叠**：预览对话框提供按 `Level` 折叠/隐藏行的控件（选择显示的最大层级），便于聚焦浅层或深层步骤。
+- **非模态与实时更新**：预览窗口为非模态，打开时仍可启动或观察实际运行。后台线程会在每步执行前后发出事件（`step_started`, `step_finished`），UI 根据这些事件实时将 `Status` 列更新为 `Running` / `Success` / `Failed`，并在发生错误时把错误信息写入 `Error` 列（并显示为 tooltip）。
+- **清空预览历史**：预览对话框包含“清空预览历史”按钮，用于清除内存中当前 root 下的状态与错误信息；清除后表格会把所有步骤还原为 `Planned` 并清空 `Error` 列的内容。
+- **状态存储与重置行为（开发者说明）**：目前状态/错误为**内存级别保留**：对同一 `root` 的预览会在同一程序会话内保留上一次的执行状态；当切换 `root` 或重启应用时这些状态会重置。若需要跨会话持久化，可将 `step_finished` 写入 SQLite/JSONL（仓库已有 `processors/builtin_recorders.py` 提供示例）。有关内存结构：`main_window.py` 使用 `_last_preview_status` 与 `_last_preview_errors`（按 root key 存储）来管理预览状态。
+- **开发者接口**：为支持 UI 的实时更新，`widgets/batch_thread.py` 增加了 `step_started` 和 `step_finished` 信号；`core/engine.py` 在每个处理器调用前后会尝试触发这些信号并传递 `step` 索引、成功标志与错误消息，UI 通过映射 `step -> 表格行` 来准确更新对应行的状态。
+
 示例演示（Word + 绘图流水线）
 - 插件：`demos/demo3/plugins/word_plot_pipeline.py`
   - `enter_dir_write_word`：进入目录时在 Word 中写入标题与路径

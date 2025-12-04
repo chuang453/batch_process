@@ -478,9 +478,22 @@ class BatchProcessor:
                 break
 
             step_counter[0] += 1
+            step_idx = step_counter[0]
             item_type = "📁目录" if is_dir else "📄文件"
             status = f"{item_type} {path.name} → {proc_name} ({phase})"
-            self._call_progress(step_counter[0], total_steps, status)
+            # emit per-step started event if worker provided
+            try:
+                if hasattr(self, 'worker') and getattr(
+                        self, 'worker') is not None and hasattr(
+                            self.worker, 'step_started'):
+                    try:
+                        self.worker.step_started.emit(step_idx)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            self._call_progress(step_idx, total_steps, status)
             print(status)
 
             metadata_info[0].append(proc_name)
@@ -490,28 +503,56 @@ class BatchProcessor:
                 try:
                     result = self._processors[proc_name](path, context,
                                                          **config)
-                    # engine no longer auto-records processor results here.
-                    # If a processor wants its output persisted it should
-                    # call `context.add_result(...)` itself or enable a
-                    # built-in recorder like `record_to_shared`.
                     metadata_info[2].append('succeed')
+                    # emit per-step finished(success)
+                    try:
+                        if hasattr(self, 'worker') and getattr(
+                                self, 'worker') is not None and hasattr(
+                                    self.worker, 'step_finished'):
+                            try:
+                                self.worker.step_finished.emit(
+                                    step_idx, True, '')
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
                 except Exception as e:
                     error_msg = f"{proc_name}: {e}"
                     print(
                         f"❌ 处理失败 [{proc_name} on {path}]: {e}\n{traceback.format_exc()}"
                     )
-                    # error recording should be handled by processors or
-                    # by optional recorders; do not auto-add here.
                     metadata_info[2].append('failed')
                     metadata_info[4].append(error_msg)
+                    # emit per-step finished(failed)
+                    try:
+                        if hasattr(self, 'worker') and getattr(
+                                self, 'worker') is not None and hasattr(
+                                    self.worker, 'step_finished'):
+                            try:
+                                self.worker.step_finished.emit(
+                                    step_idx, False, error_msg)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
 
             else:
                 warn_msg = f"{proc_name}: 未注册处理器"
                 print(f"⚠️ {warn_msg}")
                 metadata_info[2].append('failed')
                 metadata_info[4].append(warn_msg)
-                # unregistered processor — no automatic recording here;
-                # processors or optional recorders should handle recording.
+                # emit per-step finished(failed)
+                try:
+                    if hasattr(self, 'worker') and getattr(
+                            self, 'worker') is not None and hasattr(
+                                self.worker, 'step_finished'):
+                        try:
+                            self.worker.step_finished.emit(
+                                step_idx, False, warn_msg)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
 
     def _get_pre_config(self):
         func_name = self.config.get('pre_process')

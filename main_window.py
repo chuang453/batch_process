@@ -4,7 +4,7 @@ from qtpy.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                             QLineEdit, QLabel, QFileDialog, QTextEdit,
                             QTableWidget, QTableWidgetItem, QTabWidget,
                             QHeaderView, QMessageBox, QTextBrowser, QDialog,
-                            QAbstractItemView)
+                            QAbstractItemView, QSpinBox, QCheckBox)
 from qtpy.QtGui import QFont, QColor, QBrush
 from qtpy.QtCore import QThread
 import html
@@ -33,6 +33,7 @@ from widgets.widgets import FileStructureWidget
 from widgets.console import PythonConsoleWidget
 from widgets.batch_thread import BatchWorker
 from datetime import datetime
+from pathlib import Path
 from enum import Enum
 import json
 
@@ -190,15 +191,12 @@ class BatchProcessorGUI(QWidget):
         self.btn_cancel.clicked.connect(self._cancel)
         self.btn_cancel.setEnabled(False)  ##初始禁用
 
-        btn_metadata = QPushButton("ℹ️ 显示执行情况(metadata)")
-        btn_metadata.setStyleSheet("font-weight: bold")
-        btn_metadata.clicked.connect(self._show_metadata_info)
-        btn_preview = QPushButton("🔎 预览计划")
+        # Single button for preview + execution-status merged view
+        btn_preview = QPushButton("🔎 预览/执行情况")
         btn_preview.setStyleSheet("font-weight: bold")
         btn_preview.clicked.connect(self._show_preview)
 
-        for btn in [self.btn_run, self.btn_cancel,
-                    btn_metadata]:  #btn_load btn_refresh_plugin, btn_plugins,
+        for btn in [self.btn_run, self.btn_cancel]:
             btn_layout.addWidget(btn)
         btn_layout.addWidget(btn_preview)
         path_layout.addLayout(btn_layout)
@@ -596,6 +594,12 @@ class BatchProcessorGUI(QWidget):
 
         self.worker.log.connect(self._log)
         self.worker.progress.connect(self._on_progress)
+        # connect per-step signals for accurate status updates in preview
+        try:
+            self.worker.step_started.connect(self._on_step_started)
+            self.worker.step_finished.connect(self._on_step_finished)
+        except Exception:
+            pass
 
         # 启动
         self.thread.start()
@@ -611,6 +615,138 @@ class BatchProcessorGUI(QWidget):
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(current)
         self.progress_bar.setFormat(f"{status} [{current}/{total}]")
+        # If a preview table is open, update its Status column based on step index
+        try:
+            if hasattr(self, '_preview_step_map') and hasattr(
+                    self, '_preview_exec_table'):
+                # mark previous running step as Success (if any)
+                prev = getattr(self, '_preview_running_step', None)
+                if prev is not None and prev != current and prev in self._preview_step_map:
+                    prev_row = self._preview_step_map.get(prev)
+                    item = self._preview_exec_table.item(prev_row, 6)
+                    if item:
+                        item.setText('Success')
+                        item.setBackground(QBrush(QColor(200, 255, 200)))
+
+                # mark current step as Running (if present in preview)
+                if isinstance(current,
+                              int) and current in self._preview_step_map:
+                    row = self._preview_step_map.get(current)
+                    item = self._preview_exec_table.item(row, 6)
+                    if item is None:
+                        item = QTableWidgetItem('Running')
+                        self._preview_exec_table.setItem(row, 6, item)
+                    else:
+                        item.setText('Running')
+                    item.setBackground(QBrush(QColor(255, 250, 200)))
+                    self._preview_running_step = current
+        except Exception:
+            pass
+
+    def _on_step_started(self, step):
+        try:
+            # ensure we have a normalized root for persisted status mapping
+            try:
+                current_root = self.root_line.text().strip() if hasattr(
+                    self, 'root_line') else self.root_path
+                root_norm = str(Path(current_root))
+            except Exception:
+                try:
+                    root_norm = str(self.root_path)
+                except Exception:
+                    root_norm = ''
+
+            if not hasattr(self, '_last_preview_status') or getattr(
+                    self, '_last_preview_root', None) != root_norm:
+                # initialize or reset status map for this root
+                self._last_preview_status = {}
+                self._last_preview_root = root_norm
+
+            if hasattr(self, '_preview_step_map') and hasattr(
+                    self, '_preview_exec_table'):
+                if step in self._preview_step_map:
+                    row = self._preview_step_map.get(step)
+                    item = self._preview_exec_table.item(row, 6)
+                    if item is None:
+                        item = QTableWidgetItem('Running')
+                        self._preview_exec_table.setItem(row, 6, item)
+                    else:
+                        item.setText('Running')
+                    item.setBackground(QBrush(QColor(255, 250, 200)))
+                    self._preview_running_step = step
+            # persist status across preview reopenings
+            try:
+                self._last_preview_status[int(step)] = 'Running'
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _on_step_finished(self, step, success, msg):
+        try:
+            # ensure we have a normalized root for persisted status mapping
+            try:
+                current_root = self.root_line.text().strip() if hasattr(
+                    self, 'root_line') else self.root_path
+                root_norm = str(Path(current_root))
+            except Exception:
+                try:
+                    root_norm = str(self.root_path)
+                except Exception:
+                    root_norm = ''
+
+            if not hasattr(self, '_last_preview_status') or getattr(
+                    self, '_last_preview_root', None) != root_norm:
+                # initialize or reset status map for this root
+                self._last_preview_status = {}
+                self._last_preview_root = root_norm
+
+            if hasattr(self, '_preview_step_map') and hasattr(
+                    self, '_preview_exec_table'):
+                if step in self._preview_step_map:
+                    # update UI cell
+                    row = self._preview_step_map.get(step)
+                    item = self._preview_exec_table.item(row, 6)
+                    if item is None:
+                        item = QTableWidgetItem(
+                            'Success' if success else 'Failed')
+                        self._preview_exec_table.setItem(row, 6, item)
+                    else:
+                        item.setText('Success' if success else 'Failed')
+                    if success:
+                        item.setBackground(QBrush(QColor(200, 255, 200)))
+                    else:
+                        item.setBackground(QBrush(QColor(255, 200, 200)))
+                        # attach error message to tooltip
+                        if msg:
+                            item.setToolTip(msg)
+                    # set error column and clear running marker if it matches
+                    try:
+                        # ensure error mapping exists
+                        if not hasattr(self, '_last_preview_errors'):
+                            self._last_preview_errors = {}
+                        self._last_preview_errors[int(step)] = msg or ''
+                        err_item = self._preview_exec_table.item(row, 7)
+                        if err_item is None:
+                            err_item = QTableWidgetItem(msg or '')
+                            self._preview_exec_table.setItem(row, 7, err_item)
+                        else:
+                            err_item.setText(msg or '')
+                        if msg:
+                            err_item.setToolTip(msg)
+                    except Exception:
+                        pass
+                    # clear running marker if it matches
+                    if getattr(self, '_preview_running_step', None) == step:
+                        self._preview_running_step = None
+            # persist status across preview reopenings
+            try:
+                self._last_preview_status[int(
+                    step)] = 'Success' if success else 'Failed'
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _on_worker_finished(self, context):
         self._log("✅ 批处理完成！")
@@ -618,6 +754,27 @@ class BatchProcessorGUI(QWidget):
         self._show_results(context.results)
         self.btn_run.setEnabled(True)
         self.btn_cancel.setEnabled(False)
+        # Finalize preview table statuses if present
+        try:
+            if hasattr(self, '_preview_step_map') and hasattr(
+                    self, '_preview_exec_table'):
+                # mark any running step as Success
+                prev = getattr(self, '_preview_running_step', None)
+                if prev is not None and prev in self._preview_step_map:
+                    prev_row = self._preview_step_map.get(prev)
+                    item = self._preview_exec_table.item(prev_row, 6)
+                    if item:
+                        item.setText('Success')
+                        item.setBackground(QBrush(QColor(200, 255, 200)))
+                # clear mapping after finishing
+                try:
+                    del self._preview_step_map
+                    del self._preview_exec_table
+                    del self._preview_running_step
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     ##程序执行后， 显示metadata
     def _show_metadata_info(self):
@@ -647,8 +804,12 @@ class BatchProcessorGUI(QWidget):
 
         dialog.exec_()  # 显示对话框（模态）
 
-    def _show_preview(self):
-        """Show a preview plan (dry-run) for the configured root path."""
+    def _show_preview(self, show_only_executed: bool = False):
+        """Show a preview plan (dry-run) for the configured root path.
+
+        If `show_only_executed` is True, the dialog will initially hide rows
+        that are still `Planned` (show only steps that have a recorded
+        status like Success/Failed)."""
         root = self.root_line.text().strip() if hasattr(
             self, 'root_line') else self.root_path
         if not root:
@@ -662,6 +823,12 @@ class BatchProcessorGUI(QWidget):
                     self.processor.set_config(self.config)
                 except Exception:
                     pass
+
+            # normalize root for consistent caching/lookup
+            try:
+                root_norm = str(Path(root))
+            except Exception:
+                root_norm = str(root)
 
             actions = self.processor.simulate(root, max_items=1000)
         except Exception as e:
@@ -755,18 +922,64 @@ class BatchProcessorGUI(QWidget):
         # --- Execution order tab ---
         exec_tab = QWidget()
         exec_layout = QVBoxLayout()
+        # Folding controls: allow collapsing rows deeper than selected level
+        fold_layout = QHBoxLayout()
+        lbl_fold = QLabel("只显示层级 ≤")
+        spin_fold = QSpinBox()
+        spin_fold.setMinimum(0)
+        spin_fold.setMaximum(50)
+        spin_fold.setValue(0)  # 0 表示不折叠（显示所有）
+        chk_fold = QCheckBox("启用折叠")
+
+        fold_layout.addWidget(lbl_fold)
+        fold_layout.addWidget(spin_fold)
+        fold_layout.addWidget(chk_fold)
+        fold_layout.addStretch()
+        exec_layout.addLayout(fold_layout)
         exec_table = QTableWidget()
-        exec_table.setColumnCount(7)
-        exec_table.setHorizontalHeaderLabels(
-            ['Step', 'Phase', 'Level', 'Path', 'IsDir', 'Processor', 'Config'])
+        exec_table.setColumnCount(9)
+        exec_table.setHorizontalHeaderLabels([
+            'Step', 'Phase', 'Level', 'Path', 'IsDir', 'Processor', 'Status',
+            'Error', 'Config'
+        ])
         # Make table read-only (no in-place edits) and selectable by row
         exec_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         exec_table.setSelectionBehavior(QTableWidget.SelectRows)
-        # Allow interactive column resizing by the user
-        exec_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.Interactive)
-        exec_table.horizontalHeader().setStretchLastSection(False)
+        # Configure column resize modes: make Path column stretch, keep others interactive
+        header = exec_table.horizontalHeader()
+        # Allow user to freely resize any column
+        for col in range(exec_table.columnCount()):
+            header.setSectionResizeMode(col, QHeaderView.Interactive)
+        # Allow columns to be reordered by dragging the headers
+        try:
+            header.setSectionsMovable(True)
+        except Exception:
+            pass
+        # Keep sensible initial widths but allow changes
+        exec_table.setColumnWidth(0, 64)  # Step (initial)
+        exec_table.setColumnWidth(2, 56)  # Level (initial)
+        exec_table.setColumnWidth(6, 84)  # Status (initial)
         exec_layout.addWidget(exec_table)
+
+        # connect fold controls to hide/show rows by level
+        def apply_fold():
+            try:
+                enabled = chk_fold.isChecked()
+                max_level = int(spin_fold.value())
+                for r in range(exec_table.rowCount()):
+                    lvl_item = exec_table.item(r, 2)
+                    try:
+                        lvl = int(
+                            lvl_item.text()) if lvl_item is not None else 0
+                    except Exception:
+                        lvl = 0
+                    hide = enabled and (lvl > max_level)
+                    exec_table.setRowHidden(r, hide)
+            except Exception:
+                pass
+
+        chk_fold.stateChanged.connect(lambda _: apply_fold())
+        spin_fold.valueChanged.connect(lambda _: apply_fold())
         exec_tab.setLayout(exec_layout)
         tabs.addTab(exec_tab, "Execution order")
 
@@ -777,6 +990,20 @@ class BatchProcessorGUI(QWidget):
             seq = self.processor.simulate(root, sequence=True)
             steps = seq.get('steps', []) if isinstance(seq, dict) else []
             exec_table.setRowCount(len(steps))
+            # store mapping step -> row for live updates from worker
+            self._preview_step_map = {}
+            self._preview_exec_table = exec_table
+            self._preview_running_step = None
+            # maintain persistent last-known statuses across preview openings per-root
+            if not hasattr(self, '_last_preview_status'):
+                self._last_preview_status = {}
+                self._last_preview_errors = {}
+                self._last_preview_root = root_norm
+            elif getattr(self, '_last_preview_root', None) != root_norm:
+                # different root: reset stored statuses
+                self._last_preview_status = {}
+                self._last_preview_errors = {}
+                self._last_preview_root = root_norm
             for i, s in enumerate(steps):
                 # Step and phase
                 exec_table.setItem(i, 0, QTableWidgetItem(str(s.get('step'))))
@@ -824,12 +1051,58 @@ class BatchProcessorGUI(QWidget):
                 exec_table.setItem(i, 5,
                                    QTableWidgetItem(s.get('proc_name', '')))
 
+                # Status column: prefer persisted status if available
+                step_idx = None
+                try:
+                    step_idx = int(s.get('step'))
+                except Exception:
+                    step_idx = None
+
+                last_status = 'Planned'
+                if step_idx is not None:
+                    last_status = self._last_preview_status.get(
+                        step_idx, 'Planned')
+
+                status_item = QTableWidgetItem(last_status)
+                # apply color for known statuses
+                if last_status == 'Running':
+                    status_item.setBackground(QBrush(QColor(255, 250, 200)))
+                elif last_status == 'Success':
+                    status_item.setBackground(QBrush(QColor(200, 255, 200)))
+                elif last_status == 'Failed':
+                    status_item.setBackground(QBrush(QColor(255, 200, 200)))
+
+                exec_table.setItem(i, 6, status_item)
+
+                # Error column: prefer persisted error message if any
+                err_text = ''
+                try:
+                    if hasattr(
+                            self,
+                            '_last_preview_errors') and step_idx is not None:
+                        err_text = self._last_preview_errors.get(step_idx, '')
+                except Exception:
+                    err_text = ''
+                err_item = QTableWidgetItem(err_text)
+                if err_text:
+                    err_item.setToolTip(err_text)
+                exec_table.setItem(i, 7, err_item)
+
                 try:
                     cfg_text = json.dumps(s.get('config', {}),
                                           ensure_ascii=False)
                 except Exception:
                     cfg_text = str(s.get('config', ''))
-                exec_table.setItem(i, 6, QTableWidgetItem(cfg_text))
+                exec_table.setItem(i, 8, QTableWidgetItem(cfg_text))
+
+                # record mapping from step -> row for live updates
+                try:
+                    if step_idx is None:
+                        step_idx = int(s.get('step'))
+                    if step_idx is not None:
+                        self._preview_step_map[step_idx] = i
+                except Exception:
+                    pass
 
                 # Row shading by depth to enhance hierarchy perception
                 if level % 2 == 1:
@@ -844,11 +1117,94 @@ class BatchProcessorGUI(QWidget):
         except Exception:
             pass
 
+        # Clear history button (clears persisted preview statuses/errors for this root)
+        btn_clear = QPushButton("清空预览历史")
+
+        def _clear_preview_history():
+            try:
+                # reset stored statuses/errors for current root
+                if hasattr(self, '_last_preview_status'):
+                    self._last_preview_status = {}
+                if hasattr(self, '_last_preview_errors'):
+                    self._last_preview_errors = {}
+                # refresh table UI
+                try:
+                    for r in range(exec_table.rowCount()):
+                        # reset status cell
+                        status_item = exec_table.item(r, 6)
+                        if status_item is None:
+                            status_item = QTableWidgetItem('Planned')
+                            exec_table.setItem(r, 6, status_item)
+                        else:
+                            status_item.setText('Planned')
+                            status_item.setBackground(QBrush())
+                            status_item.setToolTip('')
+                        # reset error cell
+                        err_item = exec_table.item(r, 7)
+                        if err_item is None:
+                            err_item = QTableWidgetItem('')
+                            exec_table.setItem(r, 7, err_item)
+                        else:
+                            err_item.setText('')
+                            err_item.setToolTip('')
+                        # ensure row is visible
+                        exec_table.setRowHidden(r, False)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        btn_clear.clicked.connect(_clear_preview_history)
+        layout.addWidget(btn_clear)
+
         btn_close = QPushButton("关闭")
-        btn_close.clicked.connect(dialog.accept)
+        btn_close.clicked.connect(dialog.close)
         layout.addWidget(btn_close)
 
-        dialog.exec_()
+        # Keep a reference so the dialog isn't garbage-collected and make it non-modal
+        try:
+            dialog.setModal(False)
+            dialog.setWindowModality(Qt.NonModal)
+        except Exception:
+            pass
+        self._preview_dialog = dialog
+
+        # When preview dialog closes, clean up preview mappings to avoid stale refs
+        def _cleanup_preview():
+            try:
+                if hasattr(self, '_preview_step_map'):
+                    del self._preview_step_map
+                if hasattr(self, '_preview_exec_table'):
+                    del self._preview_exec_table
+                if hasattr(self, '_preview_running_step'):
+                    del self._preview_running_step
+            except Exception:
+                pass
+
+        try:
+            dialog.finished.connect(_cleanup_preview)
+        except Exception:
+            pass
+
+        # If requested, hide rows that are still Planned (i.e. only show executed steps)
+        if show_only_executed:
+            try:
+                for r in range(exec_table.rowCount()):
+                    item = exec_table.item(r, 6)
+                    status = item.text() if item is not None else 'Planned'
+                    if status == 'Planned':
+                        exec_table.setRowHidden(r, True)
+            except Exception:
+                pass
+
+        dialog.show()
+
+    def _show_execution_status(self):
+        """Open the merged execution-order view but show only executed steps."""
+        try:
+            self._show_preview(show_only_executed=True)
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"无法显示执行情况: {e}")
 
     def _gen_template(self):
         path, _ = QFileDialog.getSaveFileName(self, "保存模板", "config.yaml",
@@ -873,6 +1229,14 @@ class BatchProcessorGUI(QWidget):
             }
         """)
         self.log.clear()
+        # persist status across preview reopenings
+        try:
+            if not hasattr(self, '_last_preview_status'):
+                self._last_preview_status = {}
+            self._last_preview_status[int(
+                step)] = 'Success' if success else 'Failed'
+        except Exception:
+            pass
         self._log("系统已启动", level=LogLevel.INFO)
 
     def _log(self, text: str, level: LogLevel = LogLevel.INFO):
