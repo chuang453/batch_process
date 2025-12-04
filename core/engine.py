@@ -163,7 +163,8 @@ class BatchProcessor:
     def simulate(self,
                  root_path: str | Path,
                  max_items: int | None = None,
-                 pattern_filter: str | None = None) -> List[Dict]:
+                 pattern_filter: str | None = None,
+                 sequence: bool = False) -> Any:
         """Produce a dry-run plan for the given root_path.
 
         Returns a list of action dicts describing which processors would
@@ -182,8 +183,16 @@ class BatchProcessor:
 
         actions: List[Dict] = []
 
+        # If sequence mode requested, we'll build a linear step list
+        if sequence:
+            steps: List[Dict] = []
+            step_counter = 0
+            # include global pre/post config names
+            global_pre_name, config_pre = self._get_pre_config()
+            global_post_name, config_post = self._get_post_config()
+
         def _walk(p: Path):
-            nonlocal actions
+            nonlocal actions, step_counter, steps
             is_dir = p.is_dir()
             rules = self._get_processors_for_path(p, is_dir)
 
@@ -214,11 +223,37 @@ class BatchProcessor:
             }
 
             # optional filter
+            passed_filter = True
             if pattern_filter:
-                if pattern_filter in action["path"]:
+                passed_filter = (pattern_filter in action["path"])
+
+            if sequence and passed_filter:
+                # append pre processors
+                for proc_name, cfg in rules.get('pre', []):
+                    step_counter += 1
+                    steps.append({
+                        'step': step_counter,
+                        'phase': 'pre',
+                        'path': action['path'],
+                        'is_dir': is_dir,
+                        'proc_name': proc_name,
+                        'config': cfg,
+                    })
+                # append inline processors
+                for proc_name, cfg in rules.get('inline', []):
+                    step_counter += 1
+                    steps.append({
+                        'step': step_counter,
+                        'phase': 'inline',
+                        'path': action['path'],
+                        'is_dir': is_dir,
+                        'proc_name': proc_name,
+                        'config': cfg,
+                    })
+
+            if not sequence:
+                if passed_filter:
                     actions.append(action)
-            else:
-                actions.append(action)
 
             # early stop
             if max_items is not None and len(actions) >= max_items:
@@ -233,8 +268,50 @@ class BatchProcessor:
                 except (PermissionError, OSError):
                     pass
 
-        _walk(root)
-        return actions
+            if sequence and passed_filter:
+                # after children, append post processors for this path
+                for proc_name, cfg in rules.get('post', []):
+                    step_counter += 1
+                    steps.append({
+                        'step': step_counter,
+                        'phase': 'post',
+                        'path': action['path'],
+                        'is_dir': is_dir,
+                        'proc_name': proc_name,
+                        'config': cfg,
+                    })
+
+        # if sequence mode, include global pre, walk, then global post
+        if sequence:
+            if global_pre_name:
+                step_counter += 1
+                steps.append({
+                    'step': step_counter,
+                    'phase': 'global-pre',
+                    'path': '.',
+                    'is_dir': True,
+                    'proc_name': global_pre_name,
+                    'config': config_pre,
+                })
+
+            _walk(root)
+
+            if global_post_name:
+                step_counter += 1
+                steps.append({
+                    'step': step_counter,
+                    'phase': 'global-post',
+                    'path': '.',
+                    'is_dir': True,
+                    'proc_name': global_post_name,
+                    'config': config_post,
+                })
+
+            return {'total_steps': step_counter, 'steps': steps}
+
+        else:
+            _walk(root)
+            return actions
 
     # ==================== PRIVATE HELPERS ====================
 

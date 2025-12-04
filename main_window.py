@@ -3,7 +3,8 @@ from qtpy.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                             QGroupBox, QProgressBar, QSplitter, QPushButton,
                             QLineEdit, QLabel, QFileDialog, QTextEdit,
                             QTableWidget, QTableWidgetItem, QTabWidget,
-                            QHeaderView, QMessageBox, QTextBrowser, QDialog)
+                            QHeaderView, QMessageBox, QTextBrowser, QDialog,
+                            QAbstractItemView)
 from qtpy.QtGui import QFont, QColor
 from qtpy.QtCore import QThread
 import html
@@ -728,12 +729,17 @@ class BatchProcessorGUI(QWidget):
 
         tree_data = build_tree(actions)
 
+        # Create tabs: Tree view and Execution order view
+        tabs = QTabWidget()
+
+        # --- Tree tab ---
+        tree_tab = QWidget()
+        tree_layout = QVBoxLayout()
         try:
             file_widget = FileStructureWidget(
                 tree_data, column_names=['Pre', 'Processors', 'Post'])
-            layout.addWidget(file_widget)
+            tree_layout.addWidget(file_widget)
         except Exception:
-            # fallback to raw JSON if tree fails
             txt = QTextEdit()
             txt.setReadOnly(True)
             try:
@@ -741,7 +747,51 @@ class BatchProcessorGUI(QWidget):
             except Exception:
                 pretty = str(actions)
             txt.setPlainText(pretty)
-            layout.addWidget(txt)
+            tree_layout.addWidget(txt)
+        tree_tab.setLayout(tree_layout)
+        tabs.addTab(tree_tab, "Tree View")
+
+        # --- Execution order tab ---
+        exec_tab = QWidget()
+        exec_layout = QVBoxLayout()
+        exec_table = QTableWidget()
+        exec_table.setColumnCount(6)
+        exec_table.setHorizontalHeaderLabels(
+            ['Step', 'Phase', 'Path', 'IsDir', 'Processor', 'Config'])
+        # Make table read-only (no in-place edits) and selectable by row
+        exec_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        exec_table.setSelectionBehavior(QTableWidget.SelectRows)
+        # Allow interactive column resizing by the user
+        exec_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.Interactive)
+        exec_table.horizontalHeader().setStretchLastSection(False)
+        exec_layout.addWidget(exec_table)
+        exec_tab.setLayout(exec_layout)
+        tabs.addTab(exec_tab, "Execution order")
+
+        layout.addWidget(tabs)
+
+        # Populate execution order table
+        try:
+            seq = self.processor.simulate(root, sequence=True)
+            steps = seq.get('steps', []) if isinstance(seq, dict) else []
+            exec_table.setRowCount(len(steps))
+            for i, s in enumerate(steps):
+                exec_table.setItem(i, 0, QTableWidgetItem(str(s.get('step'))))
+                exec_table.setItem(i, 1, QTableWidgetItem(s.get('phase', '')))
+                exec_table.setItem(i, 2, QTableWidgetItem(s.get('path', '')))
+                exec_table.setItem(i, 3,
+                                   QTableWidgetItem(str(s.get('is_dir'))))
+                exec_table.setItem(i, 4,
+                                   QTableWidgetItem(s.get('proc_name', '')))
+                try:
+                    cfg_text = json.dumps(s.get('config', {}),
+                                          ensure_ascii=False)
+                except Exception:
+                    cfg_text = str(s.get('config', ''))
+                exec_table.setItem(i, 5, QTableWidgetItem(cfg_text))
+        except Exception:
+            pass
 
         btn_close = QPushButton("关闭")
         btn_close.clicked.connect(dialog.accept)
