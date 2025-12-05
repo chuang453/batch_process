@@ -119,10 +119,117 @@ def plot_from_spec_adapter(
 
 
 import math
+import colorsys
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from typing import Callable, Any, Dict, List, Optional, Tuple, Union
 from matplotlib import font_manager
+
+
+## 获取n种颜色的列表，默认使用tab20色图。颜色可有很多种
+## 获取n种颜色的列表，默认使用tab20色图。颜色可有很多种
+def get_n_colors(n: int,
+                 cmap_name: str = 'tab20') -> List[Tuple[float, float, float]]:
+    """Return `n` colors that are visually well-separated.
+
+    For small n use qualitative matplotlib colormaps (`tab10`/`tab20`).
+    For larger n generate colors by spacing hues using the golden-ratio
+    conjugate and slightly varying saturation/value to increase contrast.
+    """
+    if n <= 0:
+        return []
+    try:
+        if n <= 10:
+            base = list(plt.get_cmap('tab10').colors)
+            return [base[i % len(base)] for i in range(n)]
+        if n <= 20:
+            base = list(plt.get_cmap('tab20').colors)
+            return [base[i % len(base)] for i in range(n)]
+    except Exception:
+        pass
+
+    colors = []
+    golden = 0.618033988749895
+    for i in range(n):
+        h = (i * golden) % 1.0
+        s = 0.65 + 0.20 * ((i % 3) / 2)
+        v = 0.9 - 0.15 * ((i % 4) / 3)
+        r, g, b = colorsys.hsv_to_rgb(h, s, v)
+        colors.append((r, g, b))
+#   return colors
+    return [{'color': colori} for colori in colors]
+
+
+##返回n中线型样式
+def get_n_linestyles(n: int):
+    """
+    返回 n 个尽可能区分的线型（linestyle）。
+    包含实线、标准虚线和精心设计的自定义 dash patterns。
+    """
+    if n <= 0:
+        return []
+
+    # 1. 基础线型（优先使用）
+    base_styles = ['solid', 'dashed', 'dotted', 'dashdot']
+
+    # 2. 自定义 dash patterns（元组格式：(offset, (on, off, on, off, ...))）
+    # 每个 pattern 设计为视觉上与其它明显不同
+    custom_patterns = [
+        (0, (5, 5)),  # 长虚线
+        (0, (3, 1, 1, 1)),  # 点-点-划
+        (0, (1, 1)),  # 密集点线（比 dotted 更紧凑）
+        (0, (5, 1)),  # 长划-短空
+        (0, (3, 5, 1, 5)),  # 划-长空-点-长空
+        (0, (1, 3)),  # 短划-长空（稀疏点）
+        (0, (4, 2, 1, 2)),  # 划-空-点-空
+        (0, (2, 2, 2, 2)),  # 等长划空交替（类似 --.--）
+    ]
+
+    all_styles = base_styles + custom_patterns
+
+    styles = []
+    if n <= len(all_styles):
+        styles = all_styles[:n]
+    #  return all_styles[:n]
+    else:
+        # 超出预设数量时循环复用（避免报错）
+        print(f"警告：请求 {n} 种线型，但仅预定义 {len(all_styles)} 种，将循环复用。")
+        for i in range(n):
+            styles.append(all_styles[i % len(all_styles)])
+
+    return [{'linestyle': stylei} for stylei in styles]
+
+
+## 返回n中marker类型
+def get_n_markers(n: int, is_hollow='none'):
+    """
+    返回 n 个空心标记配置。
+    每个元素为 (marker, style_dict)，其中 style_dict 包含 mfc/mec 等。
+    """
+    base_markers = ['o', 's', '^', 'D', 'v', 'P', '*', 'X', 'h', '+', 'x']
+
+    # 定义一组区分度高的边框颜色（可选，也可统一用黑色）
+    edge_colors = [
+        'black', 'red', 'blue', 'green', 'purple', 'orange', 'brown', 'pink',
+        'gray', 'olive', 'cyan'
+    ]
+
+    configs = []
+    for i in range(n):
+        marker = base_markers[i % len(base_markers)]
+        edge_color = edge_colors[i % len(edge_colors)]
+
+        # '+' 和 'x' 默认无填充，但为了统一也显式设置
+        style = {
+            'marker': marker,
+            'markerfacecolor': is_hollow,  # ← 值为'none'时，代表空心核心
+            'markeredgecolor': edge_color,
+            'markeredgewidth': 1.2,  # 边框粗细（建议 ≥1）
+            'markersize': 6
+        }
+        configs.append(style)
+
+    return configs
 
 
 def get_chinese_font():
@@ -198,14 +305,33 @@ def generic_plot(extract_f: Callable[[Any], List[float]],
         "dpi": 100,
         "tight_layout": True,
         # legend handling defaults
-        "legend_threshold": 8,  # if > threshold, place legend outside
+        "legend_threshold": 8,  # if > threshold, move legend out of axes
         "legend_ncol_max": 4,
-        "legend_fontsize": 8
+        "legend_fontsize": 8,
+        # default placement strategy when many items: bottom
+        "legend_position": "bottom"
     }
     if plot_style:
         default_style.update(plot_style)
 
-    fig = plt.figure(figsize=default_style["figsize"])
+    debug = bool(plot_style and plot_style.get('debug'))
+    if debug:
+        print('GENERIC_PLOT: start', flush=True)
+
+    # Use a non-interactive Figure + Agg canvas to avoid starting a GUI
+    # backend when called from a worker thread.
+    try:
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+        fig = Figure(figsize=default_style["figsize"],
+                     dpi=default_style.get("dpi", 100))
+        canvas = FigureCanvas(fig)
+        if debug:
+            print('GENERIC_PLOT: created Figure+Canvas', flush=True)
+    except Exception:
+        # fallback to pyplot if imports fail
+        fig = plt.figure(figsize=default_style["figsize"])
+        canvas = None
 
     subplots = plot_spec["subplots"]
 
@@ -255,7 +381,11 @@ def generic_plot(extract_f: Callable[[Any], List[float]],
             ax.set_ylabel(sp["ylabel"])
 
         # --- 绘制线条 ---
-        for line in sp.get("lines", []):  # 修正了这里的获取方式
+        lines = sp.get("lines", [])  # 修正了这里的获取方式
+        nlines = len(lines)
+        colors_for_lines = get_n_colors(nlines)
+        line_local_idx = 0
+        for line in lines:
             x_param = line["x"]
             y_info = line["y"]
 
@@ -282,29 +412,88 @@ def generic_plot(extract_f: Callable[[Any], List[float]],
                 raise ValueError(
                     f"x/y length mismatch: {len(x_data)} vs {len(y_data)}")
 
+            # assign a generated color if caller didn't specify one
+            if not isinstance(style, dict):
+                style = {} if style is None else dict(style)
+            if 'color' not in style and line_local_idx < len(colors_for_lines):
+                style = dict(style)
+                style['color'] = colors_for_lines[line_local_idx]
+
             ax.plot(x_data, y_data, label=label, **style)
+            line_local_idx += 1
 
         # handle legend intelligently: if many labels, place legend outside
         handles, labels = ax.get_legend_handles_labels()
         nlabels = len(labels)
         if nlabels:
             legend_threshold = default_style.get("legend_threshold", 8)
+            legend_pos = default_style.get("legend_position", "auto")
             if nlabels > legend_threshold:
-                # choose number of columns to reduce legend height
-                ncol = min(default_style.get("legend_ncol_max", 4),
+                # choose number of columns to reduce legend height (or make a row)
+                ncol = min(default_style.get("legend_ncol_max", 8),
                            max(1, math.ceil(nlabels / legend_threshold)))
-                ax.legend(handles,
-                          labels,
-                          ncol=ncol,
-                          bbox_to_anchor=(1.02, 1),
-                          loc='upper left',
-                          fontsize=default_style.get("legend_fontsize", 8),
-                          markerscale=0.8)
-                # make room on the right for the legend
-                try:
-                    fig.subplots_adjust(right=0.78)
-                except Exception:
-                    pass
+                fontsize = default_style.get("legend_fontsize", 8)
+                markerscale = default_style.get("legend_markerscale", 0.8)
+
+                # Placement strategies
+                if legend_pos in ("auto", "right"):
+                    ax.legend(handles,
+                              labels,
+                              ncol=ncol,
+                              bbox_to_anchor=(1.02, 1),
+                              loc='upper left',
+                              fontsize=fontsize,
+                              markerscale=markerscale)
+                    # make room on the right for the legend
+                    try:
+                        fig.subplots_adjust(right=0.78)
+                    except Exception:
+                        pass
+                elif legend_pos == "top":
+                    # place legend above the plot, centered
+                    ax.legend(handles,
+                              labels,
+                              ncol=min(
+                                  nlabels,
+                                  default_style.get("legend_ncol_max",
+                                                    nlabels)),
+                              bbox_to_anchor=(0.5, 1.02),
+                              loc='lower center',
+                              fontsize=fontsize,
+                              markerscale=markerscale)
+                    try:
+                        fig.subplots_adjust(top=0.82)
+                    except Exception:
+                        pass
+                elif legend_pos == "bottom":
+                    # place legend below the plot, centered
+                    ax.legend(handles,
+                              labels,
+                              ncol=min(
+                                  nlabels,
+                                  default_style.get("legend_ncol_max",
+                                                    nlabels)),
+                              bbox_to_anchor=(0.5, -0.12),
+                              loc='upper center',
+                              fontsize=fontsize,
+                              markerscale=markerscale)
+                    try:
+                        fig.subplots_adjust(bottom=0.18)
+                    except Exception:
+                        pass
+                else:
+                    # fallback to default (right)
+                    ax.legend(handles,
+                              labels,
+                              ncol=ncol,
+                              bbox_to_anchor=(1.02, 1),
+                              loc='upper left',
+                              fontsize=fontsize,
+                              markerscale=markerscale)
+                    try:
+                        fig.subplots_adjust(right=0.78)
+                    except Exception:
+                        pass
             else:
                 ax.legend()
 
@@ -312,18 +501,51 @@ def generic_plot(extract_f: Callable[[Any], List[float]],
             ax.grid(True)
 
     if default_style["tight_layout"]:
-        plt.tight_layout()
+        try:
+            fig.tight_layout()
+        except Exception:
+            try:
+                plt.tight_layout()
+            except Exception:
+                pass
 
     if "save_path" in plot_spec:
-        #        # Save to file when requested (non-blocking)
-        plt.savefig(plot_spec["save_path"],
-                    dpi=default_style["dpi"],
-                    bbox_inches='tight')
+        # Save to file when requested (non-blocking)
+        try:
+            # draw on Agg canvas if available
+            if 'canvas' in locals() and getattr(locals()['canvas'], 'draw',
+                                                None):
+                try:
+                    locals()['canvas'].draw()
+                except Exception:
+                    pass
+            fig.savefig(plot_spec["save_path"],
+                        dpi=default_style.get("dpi", 100),
+                        bbox_inches='tight')
+        except Exception:
+            try:
+                plt.savefig(plot_spec.get("save_path"),
+                            dpi=default_style.get("dpi", 100),
+                            bbox_inches='tight')
+            except Exception:
+                pass
 
     # IMPORTANT: do NOT call `plt.show()` here — that will open an
     # interactive window and block the Qt event loop when called from
-    # a worker thread. Instead, close the figure to free resources.
+    # a worker thread. Instead, free figure resources.
     try:
+        # prefer to clear the figure; plt.close works with Figure objects
         plt.close(fig)
     except Exception:
-        pass
+        try:
+            fig.clf()
+        except Exception:
+            pass
+
+    # For testing or interactive inspection, optionally return the Figure
+    if plot_style and isinstance(plot_style, dict) and plot_style.get(
+            'return_figure', False):
+        try:
+            return fig
+        except Exception:
+            return None
