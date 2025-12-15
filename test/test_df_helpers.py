@@ -161,6 +161,7 @@ def test_prepend_inplace_and_overwrite(sample_df):
     df = sample_df.copy()
     # add column with same name as existing to ensure overwrite
     out = prepend_dict_columns(df, {'A': 999, 'Z': 'z'}, inplace=True)
+    print(out)
     assert out is df
     # 'A' should be overwritten and moved to front
     assert list(df.columns[:2]) == ['A', 'Z']

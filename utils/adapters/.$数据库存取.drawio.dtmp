@@ -3076,14 +3076,14 @@
         <mxCell id="vP0ytXHiEP-whMrD4Ymd-1125" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="vP0ytXHiEP-whMrD4Ymd-1121" target="vP0ytXHiEP-whMrD4Ymd-1124">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="vP0ytXHiEP-whMrD4Ymd-1121" value="对于多种数据名" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontSize=16;" vertex="1" parent="1">
+        <mxCell id="vP0ytXHiEP-whMrD4Ymd-1121" value="对于多种数据名" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontSize=16;labelBorderColor=default;" vertex="1" parent="1">
           <mxGeometry x="1366.5" y="481" width="114" height="29" as="geometry" />
         </mxCell>
         <mxCell id="vP0ytXHiEP-whMrD4Ymd-1122" value="通过字典的形式{数据名: df表}形成数据库" style="whiteSpace=wrap;html=1;" vertex="1" parent="1">
           <mxGeometry x="1575.75" y="455.5" width="229" height="34.5" as="geometry" />
         </mxCell>
         <mxCell id="vP0ytXHiEP-whMrD4Ymd-1124" value="通过sqlite存储为数据库" style="whiteSpace=wrap;html=1;" vertex="1" parent="1">
-          <mxGeometry x="1571" y="505.5" width="229" height="34.5" as="geometry" />
+          <mxGeometry x="1578.25" y="512.75" width="229" height="34.5" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>

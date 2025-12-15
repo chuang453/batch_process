@@ -167,8 +167,15 @@ def prepend_dict_columns(df: pd.DataFrame,
     ordered = new_front + rest
 
     if inplace:
-        # reindex columns in-place by assignment
-        target_df = target_df.reindex(columns=ordered)
-        return target_df
+        # perform true in-place reordering while preserving object identity
+        new_df = target_df.reindex(columns=ordered)
+        # remove all existing columns from the original df
+        orig_cols = list(df.columns)
+        if orig_cols:
+            df.drop(columns=orig_cols, inplace=True)
+        # assign columns back in the requested order
+        for col in ordered:
+            df[col] = new_df[col].values
+        return df
     else:
         return target_df.reindex(columns=ordered)
