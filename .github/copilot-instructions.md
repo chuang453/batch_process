@@ -16,30 +16,70 @@ What to know (high-impact facts)
 Common tasks & examples
 - List available processors (CLI):
   - python -m batch_processor.cli --processors
-- Run CLI pipeline:
-  - python -m batch_processor.cli <root> -c config.yaml
-- Generate a config template (CLI helper):
-  - python -m batch_processor.cli --generate-template config.yaml
+```instructions
+Short, focused reference for AI coding agents working on this repo.
 
-Important internal API & patterns
-- ProcessingContext (decorators/processor.py): passed to processors and used for shared data, results, and metadata. Use context.data, context.shared and context.add_result to record results.
-- Processors receive signature (path: Path, context: ProcessingContext, **kwargs). Use @processor(name="x", priority=60, source=SCRIPT_DIR, metadata={...}) to register and document behaviour.
-- Priority ordering: engine sorts processors by `priority` (descending). The engine does not deduplicate names — same processor may be invoked multiple times if config lists it repeatedly.
-- Error handling: engine wraps calls and records failures in context.results; processors should return structured dicts for downstream aggregation.
-- Retry decorator exists (decorators.retry) for making network/unstable processors resilient — often used before @processor.
+Overview
+- Purpose: recursive batch-processing framework (GUI + CLI) that runs named "processors" over files/dirs using YAML/JSON config.
+- Core modules:
+  - `core/engine.py` — traversal, rule matching, sequencing, progress and simulate API (`BatchProcessor`).
+  - `decorators/processor.py` — registration decorators (`@processor`, `@pre_processor`, `@post_processor`), `ProcessingContext`, `retry`, and `get_all_processors()`.
+  - `config/loader.py` — YAML/JSON load/save, `load_plugins()` dynamic import, `generate_template()`.
+  - `processors/` and `plugins/` — built-in and external processors (see `processors/builtin_recorders.py`).
+  - `cli/app.py`, `main.py`, `main_window.py` — CLI and GUI entry points.
 
-Where to look when editing or adding processors
-- Add new built-in processors under `processors/` with `@processor(...)`.
-- For project-specific or experimental processors place them in `plugins/` and ensure `load_plugins()` is called before running (see `main.py` and `cli/app.py`).
-- To expose a processor to the GUI table use the decorator metadata fields (name, source, metadata) — GUI consumes `get_all_processors()`.
+Big picture
+- Config maps glob-like patterns (relative to `root_path`) to rule dicts that may include `pre_processors`, `processors` (inline), `post_processors`, `config`, and `priority`.
+- `BatchProcessor` builds three phases per-matching-path (`pre`, `inline`, `post`), sorts each phase by priority (descending), and executes in this order. Directory processing: pre/inline → recurse children → post.
+- Global hooks: `pre_process` and `post_process` with `config_pre`/`config_post` are run once each (see `BatchProcessor.run`).
 
-Validation & examples
-- There is a quick standalone validator you can run locally without pytest: `test/run_validate_demo.py` — it creates a temp tree, runs `backup_file`, and verifies the backup.
-- A pytest-style unit test is provided at `test/test_validate.py` for automation; note some environments (Windows consoles) may require UTF-8 stdout and some versions of wcmatch expose underscore-prefixed constants (_PATHNAME/_GLOBSTAR) — the tests include small compatibility guards.
+Key APIs & conventions (practical)
+- Register a processor with `@processor(name=..., priority=..., source=..., metadata={...})`. Example implementations: `processors/file_ops.py`.
+- `@pre_processor` and `@post_processor` register lifecycle hooks. Global pre/post often accept `(context, **cfg)`.
+- Processor signature: `(path: Path, context: ProcessingContext, **kwargs)`.
+- `ProcessingContext` (see `decorators/processor.py`):
+  - `.data`, `.shared`, `.metadata` (dicts) for storing run state
+  - `.set_data`/`.get_data`/`.setdefault_data` and corresponding `.set_shared` / `.get_shared`
+  - `.add_result(result)` to append structured results (used by recorders)
+- Use `decorators.retry` to wrap unstable processors before `@processor`.
 
-Developer notes for AI contributors
-- Prefer to read `core/engine.py` and `decorators/processor.py` before changing behavior — these contain the canonical control flow and conventions.
-- When writing quick fixes or tests, use `config/generate_template()` and small temporary directories under `test/` (there are examples in `test/test1` and `test/blade_load_extract`).
-- Keep changes backward-compatible with decorator registration — avoid renaming registered processor names without adding aliases.
+Pattern matching & priorities
+- Patterns are matched against POSIX-style relative paths to `root_path`. Use `.` to match root.
+- Directory patterns end with `/` and match directories only; `**/` matches directories at any depth. File patterns like `**/*.txt` match files.
+- Within each phase (`pre`, `inline`, `post`) processors are sorted by the `priority` integer (higher runs first). The engine does not deduplicate — repeated names are invoked repeatedly.
 
-If anything here is unclear or you need a different level of detail (examples, flow diagrams, or test harness), tell me what to expand.
+Built-in recorders
+- Prefer explicit recorders for stable persistence: `record_to_shared`, `persist_history_sqlite`, `persist_history_jsonl` live in `processors/builtin_recorders.py` and use an async SQLite writer.
+- Engine can inject recorders automatically when `enable_builtin_recorders` is set in top-level config (see `core/engine.py`).
+
+CLI & quick commands
+- List processors: `python -m batch_process.cli --processors`
+- Generate template: `python -m batch_process.cli --generate-template config.yaml`
+- Run CLI: `python -m batch_process.cli <root> -c config.yaml`
+- Quick validate demo: `python test/run_validate_demo.py` (creates temp tree, runs `backup_file`, verifies backup)
+
+Files to read when changing behavior
+- `decorators/processor.py` — registration, `ProcessingContext`, `retry`, `get_all_processors()`
+- `core/engine.py` — matching (`_match_rule`), counting, sequencing, `_execute_processor_list_with_progress`, `simulate()`
+- `config/loader.py` — YAML handling, `load_plugins()` autoloader, `generate_template()`
+- `processors/builtin_recorders.py` — recorder APIs and async SQLite writer
+
+Testing
+- Run unit tests:
+  - PowerShell:
+    ```powershell
+    pip install -r requirements.txt  # if present
+    pytest -q
+    ```
+- Run the standalone validator:
+  - `python test/run_validate_demo.py`
+
+AI agent notes
+- Read `core/engine.py` and `decorators/processor.py` before changes — they define the central control flow.
+- When adding processors, include `metadata` in the decorator for GUI visibility and return structured dicts or call `context.add_result()` so recorders can persist meaningful entries.
+- Do not rename processor names used in configs; add aliases if necessary.
+- Use `load_plugins()` to load modules under `plugins/` during CLI runs and tests.
+
+If you'd like, I can expand with: (a) a minimal example processor file, (b) a sample config demonstrating recorder injection, or (c) a checklist for adding GUI signal tests.
+
+```

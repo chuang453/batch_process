@@ -71,4 +71,5 @@ def test_generic_plot():
         "tight_layout": True,
         "dpi": 200
     }
+
     generic_plot(extract_f, plot_spec, plot_style)
