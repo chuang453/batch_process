@@ -186,7 +186,33 @@ def delete_file(file: Path, context: ProcessingContext,
                "tags": [""]
            })
 def set_path_name_dict(path: Path, context: ProcessingContext, **kwargs):
-
+    """读取目录下的名称映射文件并在 `context` 中注册 `labels` 与 `categories`、'category_label_map'。
+    功能概述:
+    - 从目录 `path` 中读取一个名称字典文件（默认 `_dict.txt`，可通过 `_dict_file` 参数指定），
+        将文件中每行的 "键 值" 对解析为 {basename: label} 并存入 `context.data['file_ops']['path_name_dict'][str(path)]`。
+    - 为目录内每个项 `pathi` 在 `context.data['labels'][str(pathi)]` 追加对应别名（若字典无对应项则回退为文件名）。
+    - 搜索以 `category_suffix`（默认 `.cate`）结尾的文件来发现目录类别；如果找到则把类别名追加到
+        `context.data['categories'][str(pathi)]`。
+    参数:
+    - `path` (Path): 目标目录；若不是目录函数直接返回。
+    - `context` (ProcessingContext): 处理上下文，函数使用 `context.setdefault_data` / `context.set_data`
+        或 `context.data` 保存结果：
+            - 字典存储位置: `context.data['file_ops']['path_name_dict'][str(path)]`
+            - 标签位置: `context.data['labels'][str(pathi)]`（为列表，包含父目录前缀 + 本级别别名）
+            - 类别位置: `context.data['categories'][str(pathi)]`
+            - 类别到标签映射: `context.data['category_label_map']`，键为类别名，值为该类别下所有条目的标签列表。
+    - 可选 `kwargs`:
+            - `_dict_file` (str): 字典文件名，默认 `_dict.txt`。
+            - `category_suffix` (str): 类别文件后缀，默认 `.cate`。
+    关于缺失或格式不正确的字典文件:
+    - 如果字典文件不存在，函数不会抛错；`path_name_dict` 保持为空或已有值，随后为每个 `pathi`
+        使用 `all_dict.get(pathi.name, pathi.name)` 回退到原始文件名作为标签。
+    - 如果字典文件存在但某行格式不正确（少于两列或键为空），该行会被跳过并打印警告，不会抛出异常。
+    返回值:
+    - 成功时返回 `{"file": str(path), "processor": "set_path_name_dict", "status": "success"}`。
+    示例:
+            set_path_name_dict(Path('data/project'), context, _dict_file='_names.txt')
+    """
     if not path.is_dir():  ##非文件夹，跳过
         return
 
@@ -228,6 +254,7 @@ def set_path_name_dict(path: Path, context: ProcessingContext, **kwargs):
         context.set_data(['labels', str(pathi)],
                          path_label + [all_dict.get(pathi.name, pathi.name)])
 
+
 ##文件夹的category名
 
     path_cate = context.get_data(['categories', str(path)], [])
@@ -237,6 +264,23 @@ def set_path_name_dict(path: Path, context: ProcessingContext, **kwargs):
         for pathi in path.iterdir():
             context.set_data(['categories', str(pathi)],
                              path_cate + [cate_name[0]])
+
+        # build category -> labels mapping at context.data['category_label_map']
+        # ensure context.data exists and is dict-like
+        cd = getattr(context, 'data', None)
+        if cd is None or not isinstance(cd, dict):
+            # try to set an attribute-safe dict
+            try:
+                context.data = {}
+                cd = context.data
+            except Exception:
+                cd = {}
+        cat = cate_name[0]
+        cat_map = cd.setdefault('category_label_map', {})
+        for pathi in path.iterdir():
+            lbl = all_dict.get(pathi.name, pathi.name)
+            cat_map.setdefault(cat, []).append(lbl)
+        # stored in-place under context.data['category_label_map']
 
     return {
         "file": str(path),
