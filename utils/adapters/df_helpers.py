@@ -447,44 +447,60 @@ def get_data_from_database(data_name: str,
         # if no remaining keys, treat as no grouping
         group_keys = remaining if len(remaining) > 0 else None
 
-    # Handle out_col selection while preserving group_keys for grouping
+    # Handle out_col selection while preserving group_keys for grouping.
+    # Important: treat `group_keys is None` as "no grouping requested"; an
+    # explicit empty list (`group_keys == []`) means "group by zero columns"
+    # and should follow the grouping code paths (split/groups) that will
+    # produce a single-group result. This preserves callers' ability to
+    # request grouped output even when there are no grouping columns.
     desired_cols = None
     if out_col is not None:
         if not isinstance(out_col, (list, tuple)):
             raise TypeError('out_col must be a list or tuple of column names')
         desired_cols = list(out_col)
-        # If grouping will be performed, ensure group keys are present for grouping operations
-        if group_keys:
-            for g in group_keys:
-                if g not in working.columns:
-                    raise KeyError(f"group column '{g}' not present in table")
+        # If grouping will be performed (group_keys is not None), ensure any
+        # referenced group columns are present. For an explicit empty list the
+        # temporary columns equal desired_cols.
+        if group_keys is not None:
+            # verify group columns if any
+            if len(group_keys) > 0:
+                for g in group_keys:
+                    if g not in working.columns:
+                        raise KeyError(
+                            f"group column '{g}' not present in table")
             # temporary columns to keep for grouping: group_keys + desired_cols
-            temp_cols = list(dict.fromkeys(list(group_keys) + desired_cols))
+            temp_cols = list(
+                dict.fromkeys((list(group_keys) if group_keys else []) +
+                              desired_cols))
             for c in temp_cols:
                 if c not in working.columns:
                     raise KeyError(
                         f"requested column '{c}' not present in table")
             working = working[temp_cols].copy()
         else:
-            # no grouping, simply subset to desired columns
+            # no grouping (group_keys is None): simply subset to desired columns
             for c in desired_cols:
                 if c not in working.columns:
                     raise KeyError(
                         f"requested column '{c}' not present in table")
             working = working[desired_cols].copy()
 
-    # no grouping requested -> return frame (or split treated as frame)
-    if not group_keys:
+    # no grouping requested -> return frame (or split treated as frame).
+    # Only treat `group_keys is None` as "no grouping"; an explicit empty
+    # list should continue into the grouping logic below and be handled as
+    # a single-group case.
+    if group_keys is None:
         if out_option in ('frame', 'split'):
             return working
         else:
             raise ValueError(
                 "out_option must be one of 'split', 'groups', or 'frame'")
 
-    # validate group_keys
+    # validate group_keys (group_keys is guaranteed not to be None here)
     if not isinstance(group_keys, (list, tuple)):
         raise TypeError('group_keys must be a list or tuple of column names')
     group_keys = list(group_keys)
+    # only check membership for actual keys (empty list means no columns)
     for col in group_keys:
         if col not in working.columns:
             raise KeyError(f"group column '{col}' not present in table")
@@ -510,6 +526,19 @@ def get_data_from_database(data_name: str,
         return new_splits
     elif out_option == 'groups':
         grouped = {}
+        # special-case explicit zero-length group_keys: represent as a single
+        # group with an empty-tuple key and the full working frame
+        if len(group_keys) == 0:
+            key_tuple = ()
+            if desired_cols is not None:
+                cols_to_return = [
+                    c for c in desired_cols if c not in group_keys
+                ]
+                grouped[key_tuple] = working[cols_to_return].copy()
+            else:
+                grouped[key_tuple] = working.copy()
+            return grouped
+
         gb = working.groupby(group_keys, dropna=False)
         for key, group in gb:
             # normalize key to tuple
