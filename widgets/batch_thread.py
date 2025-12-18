@@ -6,15 +6,44 @@ from qtpy.QtCore import QObject, Signal, Slot
 
 class WriteStream:
 
-    def __init__(self, write_func):
+    def __init__(self, write_func, max_buffer=4096):
         self.write_func = write_func
+        self._buf = ""
+        self.max_buffer = max_buffer
 
     def write(self, text):
-        if text.strip():
-            self.write_func(text)
+        if not text:
+            return
+        # accumulate and emit on newline or when buffer grows too large
+        self._buf += text
+        while True:
+            if "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                if line.strip():
+                    try:
+                        self.write_func(line)
+                    except Exception:
+                        pass
+                # continue loop to handle multiple newlines
+                continue
+            # no newline: flush if buffer too large
+            if len(self._buf) >= self.max_buffer:
+                chunk = self._buf
+                self._buf = ""
+                if chunk.strip():
+                    try:
+                        self.write_func(chunk)
+                    except Exception:
+                        pass
+            break
 
     def flush(self):
-        pass
+        if self._buf and self._buf.strip():
+            try:
+                self.write_func(self._buf)
+            except Exception:
+                pass
+        self._buf = ""
 
 
 class BatchWorker(QObject):

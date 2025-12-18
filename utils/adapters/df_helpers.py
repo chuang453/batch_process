@@ -560,3 +560,45 @@ def get_data_from_database(data_name: str,
     else:
         raise ValueError(
             "out_option must be one of 'split', 'groups', or 'frame'")
+
+
+def get_database(data_name: str, context: Dict) -> Tuple[pd.DataFrame, Dict]:
+    """Convenience accessor to fetch a table DataFrame and its meta from `context`.
+
+    Parameters
+    - `data_name` (str): table key stored in `context['data']`
+    - `context` (dict): context containing the in-memory database mapping
+
+    Returns a tuple `(df_copy, meta_dict)`. `df_copy` is a copy of the
+    stored pandas DataFrame; `meta_dict` is the table metadata from
+    `context['meta']` if present, otherwise an empty dict. Raises
+    TypeError/KeyError if inputs are invalid or table is missing.
+
+    Example:
+        df, meta = get_database('my_table', context)
+    """
+    if not isinstance(data_name, str):
+        raise TypeError('data_name must be a string')
+    if not isinstance(context, dict):
+        raise TypeError('context (dict) is required')
+
+    db = context.get('data', {})
+    if not isinstance(db, dict):
+        raise TypeError(
+            "context['data'] must be a dict mapping table name -> DataFrame")
+
+    if data_name not in db:
+        raise KeyError(f"table '{data_name}' not found in context['data']")
+
+    tbl = db[data_name]
+    if not isinstance(tbl, pd.DataFrame):
+        raise TypeError(f"table '{data_name}' is not a DataFrame")
+
+    # return a copy to prevent accidental mutation of the stored table
+    df_copy = tbl.copy()
+
+    # fetch meta if available
+    meta_db = context.get('meta', {})
+    meta = meta_db.get(data_name, {}) if isinstance(meta_db, dict) else {}
+
+    return df_copy, dict(meta)

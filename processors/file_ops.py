@@ -275,11 +275,33 @@ def set_path_name_dict(path: Path, context: ProcessingContext, **kwargs):
                 cd = context.data
             except Exception:
                 cd = {}
-        cat = cate_name[0]
+        # Build per-path category->label mapping. Store under the same
+        # per-path key as `labels`/`categories`, i.e.:
+        # context.data['category_label_map'][str(pathi)] = {cat: label, ...}
         cat_map = cd.setdefault('category_label_map', {})
         for pathi in path.iterdir():
-            lbl = all_dict.get(pathi.name, pathi.name)
-            cat_map.setdefault(cat, []).append(lbl)
+            # copy to avoid accidental shared references
+            cats = list(context.get_data(['categories', str(pathi)], []))
+            labs = list(context.get_data(['labels', str(pathi)], []))
+            mapping = {}
+            # Right-align labels to categories: the most recent (last)
+            # labels correspond to the most recent categories. If there
+            # are fewer labels than categories, fall back sensibly.
+            n_c = len(cats)
+            n_l = len(labs)
+            offset = n_l - n_c
+            for i, c in enumerate(cats):
+                idx = offset + i
+                if 0 <= idx < n_l:
+                    lbl = labs[idx]
+                elif labs:
+                    lbl = labs[-1]
+                else:
+                    lbl = context.get_data(
+                        ['file_ops', 'path_name_dict',
+                         str(path)], {}).get(pathi.name, pathi.name)
+                mapping[c] = lbl
+            cat_map[str(pathi)] = mapping
         # stored in-place under context.data['category_label_map']
 
     return {
