@@ -49,7 +49,7 @@ for i, g in enumerate(groups):
     ys.append(np.sin(x * (0.5 + 0.15 * i) + phase) * amp + i * 0.2)
 
 # Generate styles: explicitly map color by 'type' only
-styles = generate_plot_style(groups, {'color_key': 'type'})
+styles = generate_plot_style(groups, {'color_key': 'type'})  #
 
 fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
 for i, y in enumerate(ys):
