@@ -562,6 +562,102 @@ def get_data_from_database(data_name: str,
             "out_option must be one of 'split', 'groups', or 'frame'")
 
 
+from collections import defaultdict
+from typing import List, Tuple, Dict, Any, Iterable
+
+
+def group_by_keys(
+        data: List[Tuple[Dict[str, Any], Any]],
+        group_keys: List[str]) -> List[List[Tuple[Dict[str, Any], Any]]]:
+    """
+    根据 dict 中的若干键对数据进行分组。
+
+    Args:
+        data: 形如 [(dict, object), ...] 的列表，例如get_data_from_database的返回值
+        group_keys: 用于分组的键名列表，如 ['region', 'category']
+
+    Returns:
+        分组后的列表：[[ (d1, o1), (d2, o2), ... ], ...]
+    """
+    groups = defaultdict(list)
+
+    for d, obj in data:
+        # 提取分组键的值，组成不可变的 tuple 作为 key
+        try:
+            key = tuple(d[k] for k in group_keys)
+        except KeyError as e:
+            raise KeyError(f"Key {e} not found in dict: {d}")
+
+        groups[key].append((d, obj))
+
+    # 返回所有分组（顺序不确定，若需确定顺序可 sorted(groups.values())）
+    return list(groups.values())
+
+
+def filter_pairs_by_dict(
+        data: List[Tuple[Dict[str, Any], Any]],
+        filter_dict: Dict[str, Any]) -> List[Tuple[Dict[str, Any], Any]]:
+    """Filter a list of (dict, obj) pairs by matching dict values.
+
+    Matching rules for each key in ``filter_dict``:
+    - If the filter value is callable, the callable is invoked with the
+      candidate value and should return truthy for a match.
+    - If the filter value is None, the candidate value matches when it is
+      None or missing/NA (uses ``pd.isna`` when available).
+    - If the filter value is a list/tuple/set, membership is used (``val in filter``).
+    - Otherwise, equality (``==``) is used.
+
+    Returns the sublist of input ``data`` where every key in ``filter_dict``
+    matches according to the rules above. Order is preserved.
+    """
+    if not isinstance(data, list):
+        raise TypeError('data must be a list of (dict, obj) tuples')
+    if not isinstance(filter_dict, dict):
+        raise TypeError('filter_dict must be a dict')
+
+    out: List[Tuple[Dict[str, Any], Any]] = []
+    for pair in data:
+        if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
+            continue
+        d, obj = pair
+        if not isinstance(d, dict):
+            continue
+        ok = True
+        for k, fv in filter_dict.items():
+            if k not in d:
+                ok = False
+                break
+            val = d.get(k)
+            # callable check
+            if callable(fv):
+                try:
+                    if not bool(fv(val)):
+                        ok = False
+                        break
+                except Exception:
+                    ok = False
+                    break
+            else:
+                # None / NA handling
+                if fv is None:
+                    if not (val is None or
+                            (hasattr(pd, 'isna') and pd.isna(val))):
+                        ok = False
+                        break
+                # membership
+                elif isinstance(fv, (list, tuple, set)):
+                    if val not in fv:
+                        ok = False
+                        break
+                else:
+                    if val != fv:
+                        ok = False
+                        break
+        if ok:
+            out.append((d, obj))
+    return out
+
+
 def get_database(data_name: str, context: Dict) -> Tuple[pd.DataFrame, Dict]:
     """Convenience accessor to fetch a table DataFrame and its meta from `context`.
 

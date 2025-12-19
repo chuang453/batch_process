@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""Quick test for generic_plot in utils.adapters.plot_helpers
+"""
+from pathlib import Path
+import numpy as np
+
+from utils.adapters.plot_helpers import generic_plot
+from utils.adapters.plot_helpers import (
+    generic_plot,
+    get_n_colors,
+    get_n_linestyles,
+    get_n_markers,
+)
+
+OUT = Path('debug_logs/test_plot.png')
+OUT.parent.mkdir(parents=True, exist_ok=True)
+
+
+# simple extractor: returns arrays for keys 'x','y1','y2'
+def extract_f(key):
+    if key == 'x':
+        return np.linspace(0, 2 * np.pi, 50)
+    if key == 'y1':
+        return np.sin(np.linspace(0, 2 * np.pi, 50))
+    if key == 'y2':
+        return np.cos(np.linspace(0, 2 * np.pi, 50))
+    # fallback: try to convert to float list
+    try:
+        return np.asarray(key)
+    except Exception:
+        return np.array([])
+
+
+colors = get_n_colors(2)
+linestyles = get_n_linestyles(2)
+markers = get_n_markers(2)
+
+plot_spec = {
+    'subplots': [{
+        'pos': (1, 1, 1),
+        'title':
+        'Sin vs Cos',
+        'xlabel':
+        'x',
+        'ylabel':
+        'value',
+        'lines': [
+            {
+                'x':
+                'x',
+                'y': [
+                    'y1',
+                    'sin(x)',
+                    {
+                        'color': colors[0],
+                        'linestyle': linestyles[0],
+                        'marker': markers[0]['marker'],
+                        'markeredgecolor': markers[0]['markeredgecolor'],
+                    },
+                ],
+            },
+            {
+                'x':
+                'x',
+                'y': [
+                    'y2',
+                    'cos(x)',
+                    {
+                        'color': colors[1],
+                        'linestyle': linestyles[1],
+                        'marker': markers[1]['marker'],
+                        'markeredgecolor': markers[1]['markeredgecolor'],
+                    },
+                ],
+            },
+        ]
+    }],
+    'save_path':
+    str(OUT)
+}
+
+fig = generic_plot(extract_f, plot_spec, plot_style={'return_figure': True})
+
+if fig is None:
+    print('FAILED: generic_plot returned None')
+else:
+    print('OK: generic_plot returned Figure')
+
+if OUT.exists():
+    print('Saved:', OUT)
+else:
+    print('Did not save file')

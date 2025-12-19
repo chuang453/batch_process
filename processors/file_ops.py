@@ -253,6 +253,30 @@ def set_path_name_dict(path: Path, context: ProcessingContext, **kwargs):
     for pathi in path.iterdir():
         context.set_data(['labels', str(pathi)],
                          path_label + [all_dict.get(pathi.name, pathi.name)])
+        # Ensure each item has a categories entry. If empty, assign a
+        # depth-based default name derived from the path relative to
+        # the processing root so downstream code has a sensible category.
+        existing_cats = context.get_data(['categories', str(pathi)], [])
+        if existing_cats:
+            context.set_data(['categories', str(pathi)], existing_cats)
+        else:
+            # compute depth relative to context.root_path when possible
+            default_cat = "depth_0"
+            try:
+                root = getattr(context, 'root_path', None)
+                if root:
+                    try:
+                        rel = pathi.resolve().relative_to(Path(root).resolve())
+                        depth = len(rel.parts) - 1 if len(rel.parts) > 0 else 0
+                    except Exception:
+                        # fallback: use number of parts in resolved path
+                        depth = len(pathi.resolve().parts)
+                else:
+                    depth = len(pathi.resolve().parts)
+                default_cat = f"depth_{depth}"
+            except Exception:
+                default_cat = "depth_unknown"
+            context.set_data(['categories', str(pathi)], [default_cat])
 
 
 ##文件夹的category名
@@ -265,44 +289,54 @@ def set_path_name_dict(path: Path, context: ProcessingContext, **kwargs):
             context.set_data(['categories', str(pathi)],
                              path_cate + [cate_name[0]])
 
-        # build category -> labels mapping at context.data['category_label_map']
-        # ensure context.data exists and is dict-like
-        cd = getattr(context, 'data', None)
-        if cd is None or not isinstance(cd, dict):
-            # try to set an attribute-safe dict
-            try:
-                context.data = {}
-                cd = context.data
-            except Exception:
-                cd = {}
-        # Build per-path category->label mapping. Store under the same
-        # per-path key as `labels`/`categories`, i.e.:
-        # context.data['category_label_map'][str(pathi)] = {cat: label, ...}
-        cat_map = cd.setdefault('category_label_map', {})
-        for pathi in path.iterdir():
-            # copy to avoid accidental shared references
-            cats = list(context.get_data(['categories', str(pathi)], []))
-            labs = list(context.get_data(['labels', str(pathi)], []))
-            mapping = {}
-            # Right-align labels to categories: the most recent (last)
-            # labels correspond to the most recent categories. If there
-            # are fewer labels than categories, fall back sensibly.
-            n_c = len(cats)
-            n_l = len(labs)
-            offset = n_l - n_c
-            for i, c in enumerate(cats):
-                idx = offset + i
-                if 0 <= idx < n_l:
-                    lbl = labs[idx]
-                elif labs:
-                    lbl = labs[-1]
-                else:
-                    lbl = context.get_data(
-                        ['file_ops', 'path_name_dict',
-                         str(path)], {}).get(pathi.name, pathi.name)
-                mapping[c] = lbl
-            cat_map[str(pathi)] = mapping
-        # stored in-place under context.data['category_label_map']
+    # build category -> labels mapping at context.data['category_label_map']
+    # ensure context.data exists and is dict-like
+    cd = getattr(context, 'data', None)
+    if cd is None or not isinstance(cd, dict):
+        # try to set an attribute-safe dict
+        try:
+            context.data = {}
+            cd = context.data
+        except Exception:
+            cd = {}
+    # Build per-path category->label mapping. Store under the same
+    # per-path key as `labels`/`categories`, i.e.:
+    # context.data['category_label_map'][str(pathi)] = {cat: label, ...}
+    cat_map = cd.setdefault('category_label_map', {})
+    for pathi in path.iterdir():
+        # copy to avoid accidental shared references
+        cats = list(context.get_data(['categories', str(pathi)], []))
+        labs = list(context.get_data(['labels', str(pathi)], []))
+        mapping = {}
+        # Right-align labels to categories: the most recent (last)
+        # labels correspond to the most recent categories. If there
+        # are fewer labels than categories, fall back sensibly.
+        n_c = len(cats)
+        n_l = len(labs)
+        offset = n_l - n_c
+        for i, c in enumerate(cats):
+            idx = offset + i
+            if 0 <= idx < n_l:
+                lbl = labs[idx]
+            elif labs:
+                lbl = labs[-1]
+            else:
+                lbl = context.get_data(
+                    ['file_ops', 'path_name_dict',
+                     str(path)], {}).get(pathi.name, pathi.name)
+            mapping[c] = lbl
+        # If there were no categories (shouldn't happen because we set defaults),
+        # ensure there is at least a fallback mapping so callers don't see an
+        # empty dict.
+        if not mapping:
+            if labs:
+                mapping['default'] = labs[-1]
+            else:
+                mapping['default'] = context.get_data(
+                    ['file_ops', 'path_name_dict',
+                     str(path)], {}).get(pathi.name, pathi.name)
+        cat_map[str(pathi)] = mapping
+    # stored in-place under context.data['category_label_map']
 
     return {
         "file": str(path),

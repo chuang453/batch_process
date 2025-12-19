@@ -7,6 +7,7 @@ from wcmatch import glob
 import traceback
 from typing import Dict, List, Tuple, Any, Optional
 from decorators.processor import ProcessingContext, PROCESSORS, PRE_PROCESSORS, POST_PROCESSORS
+import copy
 
 
 class BatchProcessor:
@@ -24,6 +25,10 @@ class BatchProcessor:
         self.current_status: Optional[str] = None
         # default status log file (can be overridden via `set_status_log`)
         self.status_log_path: Path = Path.cwd() / 'debug_logs' / 'status.log'
+        # Whether to deepcopy per-processor config before invoking processors.
+        # Default True to avoid accidental mutations of shared config objects
+        # by processor implementations.
+        self.deepcopy_processor_config: bool = True
 
     def set_config(self, config: Dict):
         self.config = config
@@ -75,6 +80,16 @@ class BatchProcessor:
             p = p / 'status.log'
         # ensure parent exists (created on first write as well)
         self.status_log_path = p
+
+    def set_isolate_processor_inputs(self, enabled: bool):
+        """Enable or disable deepcopying processor `config` when calling.
+
+        When True (default), the engine will pass a deep-copied `config`
+        dict to each processor invocation to prevent processors from
+        mutating shared configuration objects. Set to False for performance
+        when you are certain processors will not modify their input config.
+        """
+        self.deepcopy_processor_config = bool(enabled)
 
     def get_current_status(self) -> Optional[str]:
         return self.current_status
@@ -497,12 +512,21 @@ class BatchProcessor:
             print(status)
 
             metadata_info[0].append(proc_name)
-            metadata_info[1].append(config)
+            # snapshot config for metadata and call to avoid accidental
+            # mutations by processors. Use deepcopy when enabled.
+            if self.deepcopy_processor_config:
+                cfg_snapshot = copy.deepcopy(config)
+            else:
+                cfg_snapshot = config
+            metadata_info[1].append(cfg_snapshot)
 
             if proc_name in self._processors:
                 try:
+                    # call processor with isolated config if enabled
+                    cfg_for_call = cfg_snapshot
                     result = self._processors[proc_name](path, context,
-                                                         **config)
+                                                         **(cfg_for_call
+                                                            or {}))
                     metadata_info[2].append('succeed')
                     # emit per-step finished(success)
                     try:
