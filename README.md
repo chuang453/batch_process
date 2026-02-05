@@ -1,6 +1,27 @@
 Batch Process Framework (GUI + CLI)
 
-概述
+## 🎯 你能干什么？ What Can I Do?
+
+本框架能帮助你**自动化处理文件和目录**！你可以：
+- ✅ 批量备份、重命名、删除文件
+- ✅ 自动收集和汇总数据（TXT、CSV、JSON 等）
+- ✅ 生成图表和报告（支持 Word、PNG）
+- ✅ 统计代码行数、分析文件
+- ✅ 自定义任何批处理任务（通过插件）
+
+**快速了解系统能力：**
+```bash
+# 查看详细能力说明和所有可用处理器
+python -m cli.app --capabilities
+
+# 列出所有处理器
+python -m cli.app --processors
+
+# 查看完整能力文档
+cat CAPABILITIES_CN.md
+```
+
+## 概述
 - 这是一个递归批处理框架，按配置（YAML/JSON）对目录与文件执行命名处理器，支持 GUI 与 CLI 两种入口。
 - 重要模块：
   - `core/engine.py`：批处理核心（遍历、匹配规则、执行 pre/inline/post 处理器）
