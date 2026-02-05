@@ -8,7 +8,8 @@ from config.loader import load_config, generate_template, load_plugins
 from decorators.processor import get_all_processors
 
 def show_capabilities():
-    """显示系统能力和可用处理器的详细信息"""
+    """显示系统能力和可用处理器的详细信息
+    Display system capabilities and detailed processor information"""
     print("=" * 80)
     print("批处理框架能力概览 - What Can I Do?")
     print("=" * 80)
@@ -50,65 +51,41 @@ def show_capabilities():
     file_procs = [p for p in procs if p['kind'] == 'file']
     post_procs = [p for p in procs if p['kind'] == 'post']
     
+    def format_processor_info(p):
+        """Helper function to format processor metadata"""
+        meta = p.get('metadata', {})
+        desc = meta.get('description', '')
+        author = meta.get('author', '')
+        version = meta.get('version', '')
+        
+        info_parts = []
+        if desc:
+            info_parts.append(desc)
+        if author:
+            info_parts.append(f"作者: {author}")
+        if version:
+            info_parts.append(f"版本: {version}")
+        
+        info_str = " | ".join(info_parts) if info_parts else "无描述"
+        return f"  • {p['name']:30} (优先级: {p['priority']:3}) - {info_str}"
+    
     if pre_procs:
         print()
         print("📋 前处理器 (Pre-processors) - 在处理前执行:")
         for p in pre_procs:
-            meta = p.get('metadata', {})
-            desc = meta.get('description', '')
-            author = meta.get('author', '')
-            version = meta.get('version', '')
-            
-            info_parts = []
-            if desc:
-                info_parts.append(desc)
-            if author:
-                info_parts.append(f"作者: {author}")
-            if version:
-                info_parts.append(f"版本: {version}")
-            
-            info_str = " | ".join(info_parts) if info_parts else "无描述"
-            print(f"  • {p['name']:30} (优先级: {p['priority']:3}) - {info_str}")
+            print(format_processor_info(p))
     
     if file_procs:
         print()
         print("📁 文件/目录处理器 (File/Dir Processors) - 处理具体路径:")
         for p in file_procs:
-            meta = p.get('metadata', {})
-            desc = meta.get('description', '')
-            author = meta.get('author', '')
-            version = meta.get('version', '')
-            
-            info_parts = []
-            if desc:
-                info_parts.append(desc)
-            if author:
-                info_parts.append(f"作者: {author}")
-            if version:
-                info_parts.append(f"版本: {version}")
-            
-            info_str = " | ".join(info_parts) if info_parts else "无描述"
-            print(f"  • {p['name']:30} (优先级: {p['priority']:3}) - {info_str}")
+            print(format_processor_info(p))
     
     if post_procs:
         print()
         print("📊 后处理器 (Post-processors) - 在处理后执行:")
         for p in post_procs:
-            meta = p.get('metadata', {})
-            desc = meta.get('description', '')
-            author = meta.get('author', '')
-            version = meta.get('version', '')
-            
-            info_parts = []
-            if desc:
-                info_parts.append(desc)
-            if author:
-                info_parts.append(f"作者: {author}")
-            if version:
-                info_parts.append(f"版本: {version}")
-            
-            info_str = " | ".join(info_parts) if info_parts else "无描述"
-            print(f"  • {p['name']:30} (优先级: {p['priority']:3}) - {info_str}")
+            print(format_processor_info(p))
     
     print()
     print("=" * 80)

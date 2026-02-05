@@ -231,6 +231,8 @@ python -m cli.app --help
 
 #### SQLite 存储
 - 文件位置: `<log_dir>/processed_history.db`
+  - `<log_dir>` 默认为 `debug_logs` 目录（可在配置或处理器参数中自定义）
+  - 如果目录不存在，会自动创建
 - 表结构: processed_history
   - id, ts, path, processor, phase, status, cfg, result, error, raw
 

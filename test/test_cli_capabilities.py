@@ -79,9 +79,18 @@ def test_capabilities_document_exists():
     assert doc_path.exists(), "CAPABILITIES_CN.md does not exist"
     
     content = doc_path.read_text(encoding='utf-8')
-    assert len(content) > 1000, "CAPABILITIES_CN.md content is too short"
-    assert "你能干什么" in content, "Missing '你能干什么' in capabilities document"
-    assert "核心能力" in content, "Missing core capabilities section"
+    
+    # Check for required sections
+    required_sections = [
+        "你能干什么",
+        "核心能力",
+        "处理器系统",
+        "配置系统",
+        "使用场景"
+    ]
+    
+    for section in required_sections:
+        assert section in content, f"Missing required section '{section}' in capabilities document"
     
     print("✓ CAPABILITIES_CN.md exists and has proper content")
 
