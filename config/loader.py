@@ -13,6 +13,11 @@ _yaml.indent(mapping=2, sequence=4, offset=2)
 _yaml.preserve_quotes = True
 _yaml.sort_keys = False
 
+
+def is_pipeline_config(config: Dict[str, Any]) -> bool:
+    """Return True when config is a dict containing a pipeline stage list."""
+    return isinstance(config, dict) and isinstance(config.get('pipeline'), list)
+
 def to_plain_dict(data):
     """递归地将 CommentedMap / OrderedDict 转为普通 dict"""
     if isinstance(data, dict):

@@ -9,6 +9,11 @@ from typing import Dict, List, Tuple, Any, Optional
 from decorators.processor import ProcessingContext, PROCESSORS, PRE_PROCESSORS, POST_PROCESSORS
 import copy
 
+try:
+    from qtpy.QtCore import Qt
+except Exception:
+    Qt = None
+
 
 class BatchProcessor:
 
@@ -108,6 +113,32 @@ class BatchProcessor:
         if post is not None:
             self._post_processors = post
 
+    def _record_pipe_result(self,
+                            context: ProcessingContext,
+                            proc_name: str,
+                            result: Any,
+                            phase: str,
+                            path: Optional[Path] = None):
+        if not isinstance(result, dict):
+            return
+        context.pipe[proc_name] = result
+        context.pipe_log.append({
+            'path': str(path) if path is not None else '.',
+            'proc_name': proc_name,
+            'phase': phase,
+            'keys': list(result.keys()),
+            'ts': datetime.now().isoformat(sep=' ', timespec='seconds')
+        })
+
+    def _record_result(self, context: ProcessingContext, proc_name: str,
+                       result: Any):
+        if not isinstance(result, dict):
+            return
+        if 'processor' in result:
+            context.add_result(result)
+            return
+        context.add_result({'processor': proc_name, 'result': result, **result})
+
     # ==================== PUBLIC API ====================
     def run(self,
             root_path: str | Path,
@@ -147,6 +178,12 @@ class BatchProcessor:
                     # moved to optional built-in processors (e.g. record_to_shared)
                     result = self._pre_processors[global_pre_name](
                         context, **config_pre)
+                    self._record_result(context, global_pre_name, result)
+                    self._record_pipe_result(context,
+                                             global_pre_name,
+                                             result,
+                                             phase='global-pre',
+                                             path=root)
                     print('✅ 全局初始化完成!')
                 else:
                     print(f"⚠️ 未注册的全局初始化函数: {global_pre_name}")
@@ -170,6 +207,12 @@ class BatchProcessor:
                     # should be performed by configured post-processors.
                     result = self._post_processors[global_post_name](
                         context, **config_post)
+                    self._record_result(context, global_post_name, result)
+                    self._record_pipe_result(context,
+                                             global_post_name,
+                                             result,
+                                             phase='global-post',
+                                             path=root)
             except Exception as e:
                 print(f"❌ 全局最终处理失败: {e}\n{traceback.format_exc()}")
 
@@ -527,6 +570,12 @@ class BatchProcessor:
                     result = self._processors[proc_name](path, context,
                                                          **(cfg_for_call
                                                             or {}))
+                    self._record_result(context, proc_name, result)
+                    self._record_pipe_result(context,
+                                             proc_name,
+                                             result,
+                                             phase=phase,
+                                             path=path)
                     metadata_info[2].append('succeed')
                     # emit per-step finished(success)
                     try:
