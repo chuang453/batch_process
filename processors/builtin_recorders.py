@@ -148,7 +148,6 @@ class SQLiteBatchWriter:
             try:
                 item = self._queue.get(timeout=self.flush_interval)
                 buffer.append(item)
-                self._queue.task_done()
             except queue.Empty:
                 pass
 
@@ -166,6 +165,14 @@ class SQLiteBatchWriter:
                     self._flush(buffer)
                 except Exception:
                     pass
+                finally:
+                    # Mark items done only after a flush attempt, so `flush()`
+                    # can wait for true persistence completion.
+                    for _ in range(len(buffer)):
+                        try:
+                            self._queue.task_done()
+                        except Exception:
+                            pass
                 buffer.clear()
                 last_flush = now
 
@@ -174,12 +181,17 @@ class SQLiteBatchWriter:
 
     def flush(self, timeout: float = 5.0) -> bool:
         start = time.time()
-        while not self._queue.empty():
+        while True:
+            pending = 0
+            try:
+                pending = int(getattr(self._queue, 'unfinished_tasks', 0))
+            except Exception:
+                pending = 0
+            if pending <= 0 and self._queue.empty():
+                break
             if time.time() - start > timeout:
                 return False
             time.sleep(0.02)
-        # small pause to let internal loop flush buffer
-        time.sleep(self.flush_interval + 0.05)
         return True
 
     def shutdown(self, timeout: float = 2.0) -> bool:

@@ -341,5 +341,6 @@ def set_path_name_dict(path: Path, context: ProcessingContext, **kwargs):
     return {
         "file": str(path),
         "processor": "set_path_name_dict",
-        "status": "success"
+        "status": "success",
+        "entries_parsed": len(all_dict),
     }

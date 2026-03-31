@@ -727,6 +727,11 @@ def generic_plot(extract_f: Callable[[Any], List[float]],
     # IMPORTANT: do NOT call `plt.show()` here — that will open an
     # interactive window and block the Qt event loop when called from
     # a worker thread. Instead, free figure resources.
+    # For testing or interactive inspection, optionally return the Figure
+    if plot_style and isinstance(plot_style, dict) and plot_style.get(
+            'return_figure', False):
+        return fig
+
     try:
         # prefer to clear the Figure and close it
         fig.clf()
@@ -737,8 +742,4 @@ def generic_plot(extract_f: Callable[[Any], List[float]],
     except Exception:
         pass
 
-    # For testing or interactive inspection, optionally return the Figure
-    if plot_style and isinstance(plot_style, dict) and plot_style.get(
-            'return_figure', False):
-        return fig
     return None
