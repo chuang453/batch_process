@@ -1,0 +1,13 @@
+# Pipeline demo config
+# Two stages:
+#   1. walk  — traverse a directory tree and back up every .txt file
+#   2. data  — (placeholder) annotate results via a no-op transform
+
+pipeline:
+  - type: walk
+    name: scan_txt
+    root: "."           # resolved relative to script cwd when run via run_demo.py
+    config:
+      "**/*.txt":
+        processors:
+          - record_to_shared
