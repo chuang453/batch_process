@@ -4,7 +4,7 @@ from qtpy.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                             QLineEdit, QLabel, QFileDialog, QTextEdit,
                             QTableWidget, QTableWidgetItem, QTabWidget,
                             QHeaderView, QMessageBox, QTextBrowser, QDialog,
-                            QAbstractItemView, QSpinBox, QCheckBox)
+                            QAbstractItemView, QSpinBox, QCheckBox, QComboBox)
 from qtpy.QtGui import QFont, QColor, QBrush
 from qtpy.QtCore import QThread
 import html
@@ -24,7 +24,8 @@ STYLE = 'friendly'  # 试试 'vs' 或 'colorful' 看你喜欢哪个
 import pprint
 
 from core.engine import BatchProcessor
-from config.loader import load_config, generate_template  #AVAILABLE_PROCESSORS,
+from core.pipeline import Pipeline
+from config.loader import load_config, generate_template, is_pipeline_config  #AVAILABLE_PROCESSORS,
 from decorators.processor import ProcessingContext, PROCESSORS, PRE_PROCESSORS, POST_PROCESSORS, get_all_processors, _unregister_processor, _unregister_pre, _unregister_post
 from processors import *  ##导入内置处理函数
 from qtpy.QtGui import QTextCharFormat, QSyntaxHighlighter
@@ -158,6 +159,7 @@ class BatchProcessorGUI(QWidget):
 
         self.processor = BatchProcessor()  ##批处理器
         self.context = ProcessingContext()  ##背景数据库
+        self._is_pipeline_mode = False
 
         # 主布局
         self.main_layout = QVBoxLayout()
@@ -432,15 +434,36 @@ class BatchProcessorGUI(QWidget):
 
         try:
             self.config = load_config(self.config_path)
+            self._is_pipeline_mode = is_pipeline_config(self.config)
+            self._ensure_runner_from_config()
 
             # 格式化为 YAML 字符串显示
             yaml_str = format_config_yaml(self.config)
             self.config_textedit.setPlainText(yaml_str)
 
-            self._log(f"✅ 配置加载成功: {list(self.config.keys())}")
+            mode = "Pipeline" if self._is_pipeline_mode else "BatchProcessor"
+            self._log(f"✅ 配置加载成功: {list(self.config.keys())} | 模式: {mode}")
 
         except Exception as e:
             self._log(f"❌ 加载失败: {e}")
+
+    def _ensure_runner_from_config(self):
+        if not hasattr(self, 'config'):
+            return
+
+        if is_pipeline_config(self.config):
+            if not isinstance(self.processor, Pipeline):
+                self.processor = Pipeline(stages=self.config.get('pipeline', []),
+                                          context=self.context)
+            else:
+                self.processor.set_config(self.config)
+            self._is_pipeline_mode = True
+            return
+
+        if isinstance(self.processor, Pipeline):
+            self.processor = BatchProcessor()
+        self._is_pipeline_mode = False
+        self.processor.set_config(self.config)
 
     def _save_config_file(self):
         """保存当前编辑的配置到文件"""
@@ -508,6 +531,7 @@ class BatchProcessorGUI(QWidget):
             return
 
         try:
+            self._ensure_runner_from_config()
             #    self.processor = BatchProcessor(self.config)  #, AVAILABLE_PROCESSORS
             self.processor.set_config(self.config)
             self._log(f"✅ 批处理器构建完毕!")
@@ -563,11 +587,13 @@ class BatchProcessorGUI(QWidget):
         # ✅ 禁用按钮
         self.btn_run.setEnabled(False)
         self.btn_cancel.setEnabled(True)  # 如果有取消按钮
+        self._ensure_runner_from_config()
         # ✅ 关键：注入用户选择的处理器
         self.processor.set_config(self.config)
-        self.processor.set_processors(pre=pre_proc,
-                                      main=main_proc,
-                                      post=post_proc)
+        if not isinstance(self.processor, Pipeline):
+            self.processor.set_processors(pre=pre_proc,
+                                          main=main_proc,
+                                          post=post_proc)
         self._log(
             f"✅ 批处理器构建完毕!启用插件: {len(pre_proc)+len(main_proc)+len(post_proc)} 个"
         )
@@ -817,6 +843,7 @@ class BatchProcessorGUI(QWidget):
             return
 
         try:
+            self._ensure_runner_from_config()
             # ensure processor has the currently loaded config
             if hasattr(self, 'config') and self.config:
                 try:
@@ -922,6 +949,7 @@ class BatchProcessorGUI(QWidget):
         # --- Execution order tab ---
         exec_tab = QWidget()
         exec_layout = QVBoxLayout()
+        is_pipeline = getattr(self, '_is_pipeline_mode', False)
         # Folding controls: allow collapsing rows deeper than selected level
         fold_layout = QHBoxLayout()
         lbl_fold = QLabel("只显示层级 ≤")
@@ -934,14 +962,24 @@ class BatchProcessorGUI(QWidget):
         fold_layout.addWidget(lbl_fold)
         fold_layout.addWidget(spin_fold)
         fold_layout.addWidget(chk_fold)
+
+        # Stage filter dropdown (pipeline mode only)
+        stage_filter_combo = None
+        if is_pipeline:
+            fold_layout.addSpacing(16)
+            lbl_stage = QLabel("Stage:")
+            stage_filter_combo = QComboBox()
+            stage_filter_combo.addItem("All stages")
+            fold_layout.addWidget(lbl_stage)
+            fold_layout.addWidget(stage_filter_combo)
+
         fold_layout.addStretch()
         exec_layout.addLayout(fold_layout)
         exec_table = QTableWidget()
-        exec_table.setColumnCount(9)
-        exec_table.setHorizontalHeaderLabels([
-            'Step', 'Phase', 'Level', 'Path', 'IsDir', 'Processor', 'Status',
-            'Error', 'Config'
-        ])
+        n_cols = 10 if is_pipeline else 9
+        exec_table.setColumnCount(n_cols)
+        base_headers = ['Step', 'Phase', 'Level', 'Path', 'IsDir', 'Processor', 'Status', 'Error', 'Config']
+        exec_table.setHorizontalHeaderLabels(base_headers + (['Stage'] if is_pipeline else []))
         # Make table read-only (no in-place edits) and selectable by row
         exec_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         exec_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -959,27 +997,35 @@ class BatchProcessorGUI(QWidget):
         exec_table.setColumnWidth(0, 64)  # Step (initial)
         exec_table.setColumnWidth(2, 56)  # Level (initial)
         exec_table.setColumnWidth(6, 84)  # Status (initial)
+        if is_pipeline:
+            exec_table.setColumnWidth(9, 110)  # Stage (initial)
         exec_layout.addWidget(exec_table)
 
-        # connect fold controls to hide/show rows by level
+        # connect fold + stage filter controls to hide/show rows
         def apply_fold():
             try:
                 enabled = chk_fold.isChecked()
                 max_level = int(spin_fold.value())
+                stage_sel = stage_filter_combo.currentText() if stage_filter_combo is not None else 'All stages'
                 for r in range(exec_table.rowCount()):
                     lvl_item = exec_table.item(r, 2)
                     try:
-                        lvl = int(
-                            lvl_item.text()) if lvl_item is not None else 0
+                        lvl = int(lvl_item.text()) if lvl_item is not None else 0
                     except Exception:
                         lvl = 0
                     hide = enabled and (lvl > max_level)
+                    if not hide and stage_sel and stage_sel != 'All stages' and stage_filter_combo is not None:
+                        stage_item = exec_table.item(r, 9)
+                        row_stage = stage_item.text() if stage_item is not None else ''
+                        hide = (row_stage != stage_sel)
                     exec_table.setRowHidden(r, hide)
             except Exception:
                 pass
 
         chk_fold.stateChanged.connect(lambda _: apply_fold())
         spin_fold.valueChanged.connect(lambda _: apply_fold())
+        if stage_filter_combo is not None:
+            stage_filter_combo.currentIndexChanged.connect(lambda _: apply_fold())
         exec_tab.setLayout(exec_layout)
         tabs.addTab(exec_tab, "Execution order")
 
@@ -1095,6 +1141,11 @@ class BatchProcessorGUI(QWidget):
                     cfg_text = str(s.get('config', ''))
                 exec_table.setItem(i, 8, QTableWidgetItem(cfg_text))
 
+                # Stage column (pipeline mode only)
+                if is_pipeline:
+                    stage_val = s.get('stage', '')
+                    exec_table.setItem(i, 9, QTableWidgetItem(str(stage_val)))
+
                 # record mapping from step -> row for live updates
                 try:
                     if step_idx is None:
@@ -1116,6 +1167,20 @@ class BatchProcessorGUI(QWidget):
                             item.setBackground(shade)
         except Exception:
             pass
+
+        # Populate stage filter combobox with unique stage names (pipeline mode)
+        if is_pipeline and stage_filter_combo is not None:
+            try:
+                stages_seen = []
+                for r in range(exec_table.rowCount()):
+                    item = exec_table.item(r, 9)
+                    if item is not None:
+                        s_val = item.text()
+                        if s_val and s_val not in stages_seen:
+                            stages_seen.append(s_val)
+                            stage_filter_combo.addItem(s_val)
+            except Exception:
+                pass
 
         # Clear history button (clears persisted preview statuses/errors for this root)
         btn_clear = QPushButton("清空预览历史")
@@ -1229,14 +1294,6 @@ class BatchProcessorGUI(QWidget):
             }
         """)
         self.log.clear()
-        # persist status across preview reopenings
-        try:
-            if not hasattr(self, '_last_preview_status'):
-                self._last_preview_status = {}
-            self._last_preview_status[int(
-                step)] = 'Success' if success else 'Failed'
-        except Exception:
-            pass
         self._log("系统已启动", level=LogLevel.INFO)
 
     def _log(self, text: str, level: LogLevel = LogLevel.INFO):
