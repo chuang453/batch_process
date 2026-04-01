@@ -32,7 +32,8 @@ from qtpy.QtGui import QTextCharFormat, QSyntaxHighlighter
 
 from widgets.widgets import FileStructureWidget
 from widgets.console import PythonConsoleWidget
-from widgets.batch_thread import BatchWorker
+from widgets.batch_thread import BatchWorker, Stage1ProfileWorker
+from stage1_bridge import export_artifact
 from datetime import datetime
 from pathlib import Path
 from enum import Enum
@@ -269,9 +270,13 @@ class BatchProcessorGUI(QWidget):
         # 添加到上半区水平分割器
         upper_splitter.addWidget(plugin_widget)
 
-        # 右侧：配置编辑区
-        config_widget = QWidget()
-        config_layout = QVBoxLayout()
+        # 右侧：Stage 主标签（Walk Stage / Data Stage）
+        stage_widget = QWidget()
+        stage_layout = QVBoxLayout()
+        self.stage_tabs = QTabWidget()
+
+        walk_stage_tab = QWidget()
+        walk_stage_layout = QVBoxLayout()
 
         config_group = QGroupBox("📄 配置文件 (config.yaml)")
         config_inner_layout = QVBoxLayout()
@@ -285,7 +290,6 @@ class BatchProcessorGUI(QWidget):
         self.highlighter = YamlHighlighter(self.config_textedit.document())
         config_inner_layout.addWidget(self.config_textedit)
 
-        # 按钮
         config_btn_layout = QHBoxLayout()
         btn_load = QPushButton("🔄 加载配置")
         btn_load.clicked.connect(self._load_config)
@@ -300,9 +304,163 @@ class BatchProcessorGUI(QWidget):
         config_inner_layout.addLayout(config_btn_layout)
 
         config_group.setLayout(config_inner_layout)
-        config_layout.addWidget(config_group)
-        config_widget.setLayout(config_layout)
-        upper_splitter.addWidget(config_widget)
+        walk_stage_layout.addWidget(config_group)
+
+        # Stage 1 DataFrame explorer: list + preview + schema + describe
+        stage1_group = QGroupBox("🧾 Stage 1 DataFrame 预览")
+        stage1_layout = QVBoxLayout()
+
+        stage1_toolbar = QHBoxLayout()
+        btn_import_df = QPushButton("📥 导入数据")
+        btn_import_df.clicked.connect(self._import_stage1_dataframe)
+        btn_refresh_df = QPushButton("🔄 刷新数据集")
+        btn_refresh_df.clicked.connect(self._refresh_stage1_data_view)
+        lbl_rows = QLabel("预览行数")
+        self.stage1_preview_rows = QSpinBox()
+        self.stage1_preview_rows.setMinimum(5)
+        self.stage1_preview_rows.setMaximum(500)
+        self.stage1_preview_rows.setValue(50)
+        lbl_mode = QLabel("模式")
+        self.stage1_preview_mode = QComboBox()
+        self.stage1_preview_mode.addItems(["head", "sample"])
+        self.stage1_preview_mode.currentIndexChanged.connect(
+            lambda _: self._refresh_stage1_preview_only())
+        self.stage1_preview_rows.valueChanged.connect(
+            lambda _: self._refresh_stage1_preview_only())
+        stage1_toolbar.addWidget(btn_import_df)
+        stage1_toolbar.addWidget(btn_refresh_df)
+        stage1_toolbar.addWidget(lbl_rows)
+        stage1_toolbar.addWidget(self.stage1_preview_rows)
+        stage1_toolbar.addWidget(lbl_mode)
+        stage1_toolbar.addWidget(self.stage1_preview_mode)
+        stage1_toolbar.addStretch()
+        stage1_layout.addLayout(stage1_toolbar)
+
+        self.stage1_summary = QLabel("等待 Stage 1 产出或导入 DataFrame。")
+        self.stage1_summary.setWordWrap(True)
+        stage1_layout.addWidget(self.stage1_summary)
+
+        self.stage1_profile_progress = QProgressBar()
+        self.stage1_profile_progress.setVisible(False)
+        self.stage1_profile_progress.setTextVisible(True)
+        self.stage1_profile_progress.setFormat("正在生成大数据集摘要...")
+        stage1_layout.addWidget(self.stage1_profile_progress)
+
+        stage1_splitter = QSplitter(Qt.Horizontal)
+
+        self.stage1_df_list = QTableWidget()
+        self.stage1_df_list.setColumnCount(4)
+        self.stage1_df_list.setHorizontalHeaderLabels(['Key', 'Shape', '来源', '更新时间'])
+        self.stage1_df_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.stage1_df_list.setSelectionBehavior(QTableWidget.SelectRows)
+        self.stage1_df_list.verticalHeader().setVisible(False)
+        self.stage1_df_list.cellClicked.connect(self._on_stage1_df_selected)
+        list_header = self.stage1_df_list.horizontalHeader()
+        for col in range(self.stage1_df_list.columnCount()):
+            list_header.setSectionResizeMode(col, QHeaderView.Interactive)
+        self.stage1_df_list.setColumnWidth(0, 160)
+        self.stage1_df_list.setColumnWidth(1, 100)
+        self.stage1_df_list.setColumnWidth(2, 120)
+        self.stage1_df_list.setColumnWidth(3, 140)
+        stage1_splitter.addWidget(self.stage1_df_list)
+
+        stage1_detail_widget = QWidget()
+        stage1_detail_layout = QVBoxLayout()
+        
+        # Preview table header with pagination controls
+        preview_header_layout = QHBoxLayout()
+        preview_header_layout.addWidget(QLabel("当前 DataFrame 预览"))
+        preview_header_layout.addStretch()
+        self.stage1_pagination_prev_btn = QPushButton("◀ 上一页")
+        self.stage1_pagination_prev_btn.clicked.connect(self._pagination_prev_page)
+        self.stage1_pagination_label = QLabel("第 1 页 / 共 1 页")
+        self.stage1_pagination_label.setMinimumWidth(120)
+        self.stage1_pagination_next_btn = QPushButton("下一页 ▶")
+        self.stage1_pagination_next_btn.clicked.connect(self._pagination_next_page)
+        preview_header_layout.addWidget(self.stage1_pagination_prev_btn)
+        preview_header_layout.addWidget(self.stage1_pagination_label)
+        preview_header_layout.addWidget(self.stage1_pagination_next_btn)
+        stage1_detail_layout.addLayout(preview_header_layout)
+        
+        self.stage1_preview_table = QTableWidget()
+        self.stage1_preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.stage1_preview_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.stage1_preview_table.verticalHeader().setVisible(False)
+        stage1_detail_layout.addWidget(self.stage1_preview_table)
+
+        stage1_stats_split = QSplitter(Qt.Horizontal)
+        self.stage1_columns_text = QTextEdit()
+        self.stage1_columns_text.setReadOnly(True)
+        self.stage1_columns_text.setPlaceholderText("列信息（dtype / null / unique）")
+        stage1_stats_split.addWidget(self.stage1_columns_text)
+
+        self.stage1_describe_text = QTextEdit()
+        self.stage1_describe_text.setReadOnly(True)
+        self.stage1_describe_text.setPlaceholderText("统计摘要（describe）")
+        stage1_stats_split.addWidget(self.stage1_describe_text)
+        stage1_stats_split.setSizes([300, 300])
+        stage1_detail_layout.addWidget(stage1_stats_split)
+
+        compare_row = QHBoxLayout()
+        compare_row.addWidget(QLabel("对比目标"))
+        self.stage1_compare_target = QComboBox()
+        self.stage1_compare_target.setMinimumWidth(180)
+        compare_row.addWidget(self.stage1_compare_target)
+        btn_compare = QPushButton("对比当前与目标")
+        btn_compare.clicked.connect(self._compare_stage1_dataframes)
+        compare_row.addWidget(btn_compare)
+        compare_row.addStretch()
+        stage1_detail_layout.addLayout(compare_row)
+
+        self.stage1_compare_text = QTextEdit()
+        self.stage1_compare_text.setReadOnly(True)
+        self.stage1_compare_text.setPlaceholderText("对比摘要：行列差异、列增减、dtype变化")
+        stage1_detail_layout.addWidget(self.stage1_compare_text)
+
+        stage1_detail_widget.setLayout(stage1_detail_layout)
+        stage1_splitter.addWidget(stage1_detail_widget)
+        stage1_splitter.setSizes([320, 680])
+        stage1_layout.addWidget(stage1_splitter)
+        stage1_group.setLayout(stage1_layout)
+        walk_stage_layout.addWidget(stage1_group)
+        walk_stage_tab.setLayout(walk_stage_layout)
+        self.stage_tabs.addTab(walk_stage_tab, "Stage 1 (Walk)")
+
+        data_stage_tab = QWidget()
+        data_stage_layout = QVBoxLayout()
+
+        self.data_stage_summary = QLabel("Stage 2 已独立为独立工作台。当前页仅保留桥接入口。")
+        self.data_stage_summary.setWordWrap(True)
+        data_stage_layout.addWidget(self.data_stage_summary)
+
+        stage2_bridge_toolbar = QHBoxLayout()
+        btn_open_stage2 = QPushButton("🚀 打开 Stage 2 工作台")
+        btn_open_stage2.clicked.connect(self._open_stage2_workspace)
+        stage2_bridge_toolbar.addWidget(btn_open_stage2)
+        btn_export_stage2 = QPushButton("📦 导出 Stage 1 Artifact")
+        btn_export_stage2.clicked.connect(self._export_stage1_to_stage2_artifact)
+        stage2_bridge_toolbar.addWidget(btn_export_stage2)
+        btn_refresh_stage2 = QPushButton("🔄 刷新桥接信息")
+        btn_refresh_stage2.clicked.connect(self._refresh_stage2_bridge_panel)
+        stage2_bridge_toolbar.addWidget(btn_refresh_stage2)
+        stage2_bridge_toolbar.addStretch()
+        data_stage_layout.addLayout(stage2_bridge_toolbar)
+
+        self.stage2_bridge_summary = QLabel("等待 Stage 1 数据或 pipeline data stages。")
+        self.stage2_bridge_summary.setWordWrap(True)
+        data_stage_layout.addWidget(self.stage2_bridge_summary)
+
+        self.stage2_bridge_text = QTextEdit()
+        self.stage2_bridge_text.setReadOnly(True)
+        self.stage2_bridge_text.setPlaceholderText("这里展示将发送给独立 Stage 2 工作台的输入与 data stage 摘要。")
+        data_stage_layout.addWidget(self.stage2_bridge_text)
+
+        data_stage_tab.setLayout(data_stage_layout)
+        self.stage_tabs.addTab(data_stage_tab, "Stage 2 (Data)")
+
+        stage_layout.addWidget(self.stage_tabs)
+        stage_widget.setLayout(stage_layout)
+        upper_splitter.addWidget(stage_widget)
 
         # 设置左右比例：插件 40%，配置 60%
         upper_splitter.setSizes([400, 700])
@@ -344,6 +502,21 @@ class BatchProcessorGUI(QWidget):
         # 设置主分割比例：上半 60%，下半 40%
         main_splitter.setSizes([450, 300])
         self.main_layout.addWidget(main_splitter)
+
+        self._stage1_df_meta = {}
+        self._current_stage1_key = None
+        self._stage1_pagination_current_page = 0
+        self._stage1_pagination_total_pages = 0
+        self._stage1_profile_cache = {}
+        self._stage1_profile_thread = None
+        self._stage1_profile_worker = None
+        self._stage1_profile_request_id = 0
+        self._stage1_profile_active_request_id = None
+        self._stage1_profile_active_cache_key = None
+        self._stage2_workspace_window = None
+        self._refresh_stage1_data_view()
+        self._refresh_data_stage_view()
+        self._refresh_stage2_bridge_panel()
 
         # ========== 3. 进度条（固定） ==========
         progress_layout = QHBoxLayout()
@@ -440,6 +613,8 @@ class BatchProcessorGUI(QWidget):
             # 格式化为 YAML 字符串显示
             yaml_str = format_config_yaml(self.config)
             self.config_textedit.setPlainText(yaml_str)
+            self._refresh_stage1_data_view()
+            self._refresh_data_stage_view()
 
             mode = "Pipeline" if self._is_pipeline_mode else "BatchProcessor"
             self._log(f"✅ 配置加载成功: {list(self.config.keys())} | 模式: {mode}")
@@ -490,6 +665,10 @@ class BatchProcessorGUI(QWidget):
 
             # 更新内存
             self.config = new_config
+            self._is_pipeline_mode = is_pipeline_config(self.config)
+            self._ensure_runner_from_config()
+            self._refresh_stage1_data_view()
+            self._refresh_data_stage_view()
 
             self._log(f"✅ 配置已保存: {self.config_path}")
             # 可选：重新加载以刷新 UI（如果 save_config 没有副作用）
@@ -497,6 +676,529 @@ class BatchProcessorGUI(QWidget):
 
         except Exception as e:
             self._log(f"❌ 保存失败: {e}")
+
+    def _refresh_stage1_compare_targets(self):
+        if not hasattr(self, 'stage1_compare_target'):
+            return
+        current = self.stage1_compare_target.currentText()
+        self.stage1_compare_target.blockSignals(True)
+        self.stage1_compare_target.clear()
+        self.stage1_compare_target.addItem('')
+        for key in sorted(getattr(self.context, 'main', {}).keys()):
+            if isinstance(self.context.get_main(key), pd.DataFrame):
+                self.stage1_compare_target.addItem(str(key))
+        if current:
+            idx = self.stage1_compare_target.findText(current)
+            if idx >= 0:
+                self.stage1_compare_target.setCurrentIndex(idx)
+        self.stage1_compare_target.blockSignals(False)
+
+    def _collect_stage1_dataframes(self):
+        dfs = {}
+        for key, value in (getattr(self.context, 'main', {}) or {}).items():
+            if isinstance(value, pd.DataFrame):
+                dfs[str(key)] = value
+                meta = self._stage1_df_meta.setdefault(str(key), {})
+                meta.setdefault('source', 'stage1')
+                meta.setdefault(
+                    'updated_at',
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        return dfs
+
+    def _refresh_stage1_data_view(self, select_key: str = None):
+        if not hasattr(self, 'stage1_df_list'):
+            return
+
+        dfs = self._collect_stage1_dataframes()
+        keys = sorted(dfs.keys())
+        self.stage1_df_list.setRowCount(len(keys))
+
+        for row, key in enumerate(keys):
+            df = dfs[key]
+            shape = f"{len(df)} x {len(df.columns)}"
+            meta = self._stage1_df_meta.get(key, {})
+            src = meta.get('source', 'stage1')
+            ts = meta.get('updated_at', '')
+            self.stage1_df_list.setItem(row, 0, QTableWidgetItem(key))
+            self.stage1_df_list.setItem(row, 1, QTableWidgetItem(shape))
+            self.stage1_df_list.setItem(row, 2, QTableWidgetItem(str(src)))
+            self.stage1_df_list.setItem(row, 3, QTableWidgetItem(str(ts)))
+
+        if not keys:
+            self.stage1_summary.setText("当前没有可预览的 DataFrame。可先运行 Stage 1 或导入数据。")
+            self._current_stage1_key = None
+            self._stage1_pagination_current_page = 0
+            self._stage1_pagination_total_pages = 0
+            self._cancel_stage1_profile_worker()
+            if hasattr(self, 'stage1_pagination_label'):
+                self.stage1_pagination_label.setText("第 1 页 / 共 1 页")
+                self.stage1_pagination_prev_btn.setEnabled(False)
+                self.stage1_pagination_next_btn.setEnabled(False)
+            self.stage1_preview_table.setRowCount(0)
+            self.stage1_preview_table.setColumnCount(0)
+            self.stage1_columns_text.clear()
+            self.stage1_describe_text.clear()
+            self.stage1_compare_text.clear()
+            self._refresh_stage1_compare_targets()
+            return
+
+        pick_key = select_key if select_key in dfs else self._current_stage1_key
+        if pick_key not in dfs:
+            pick_key = keys[0]
+
+        # select row + render right side
+        for row, key in enumerate(keys):
+            if key == pick_key:
+                self.stage1_df_list.selectRow(row)
+                break
+
+        self._current_stage1_key = pick_key
+        self.stage1_summary.setText(
+            f"当前数据集: {pick_key} | 总计 {len(keys)} 个 DataFrame。")
+        self._render_stage1_dataframe(dfs[pick_key])
+        self._refresh_stage1_compare_targets()
+
+    def _refresh_stage1_preview_only(self):
+        if not self._current_stage1_key:
+            return
+        df = self.context.get_main(self._current_stage1_key)
+        if isinstance(df, pd.DataFrame):
+            self._stage1_pagination_current_page = 0
+            self._render_stage1_dataframe(df, page=0)
+
+    def _on_stage1_df_selected(self, row, _col):
+        item = self.stage1_df_list.item(row, 0)
+        if item is None:
+            return
+        key = item.text()
+        df = self.context.get_main(key)
+        if isinstance(df, pd.DataFrame):
+            self._current_stage1_key = key
+            self.stage1_summary.setText(f"当前数据集: {key}")
+            self._stage1_pagination_current_page = 0
+            self._render_stage1_dataframe(df, page=0)
+
+    def _compare_stage1_dataframes(self):
+        base_key = self._current_stage1_key
+        other_key = self.stage1_compare_target.currentText().strip() if hasattr(
+            self, 'stage1_compare_target') else ''
+        if not base_key:
+            self.stage1_compare_text.setPlainText("请先选择当前 DataFrame。")
+            return
+        if not other_key:
+            self.stage1_compare_text.setPlainText("请先选择对比目标。")
+            return
+        if base_key == other_key:
+            self.stage1_compare_text.setPlainText("当前 DataFrame 与对比目标相同。")
+            return
+
+        base_df = self.context.get_main(base_key)
+        other_df = self.context.get_main(other_key)
+        if not isinstance(base_df, pd.DataFrame) or not isinstance(other_df,
+                                                                  pd.DataFrame):
+            self.stage1_compare_text.setPlainText("对比对象不存在或不是 DataFrame。")
+            return
+
+        base_cols = [str(c) for c in base_df.columns]
+        other_cols = [str(c) for c in other_df.columns]
+        base_set = set(base_cols)
+        other_set = set(other_cols)
+        only_base = sorted(base_set - other_set)
+        only_other = sorted(other_set - base_set)
+        common = sorted(base_set & other_set)
+
+        dtype_changed = []
+        for col in common:
+            bdt = str(base_df[col].dtype)
+            odt = str(other_df[col].dtype)
+            if bdt != odt:
+                dtype_changed.append((col, bdt, odt))
+
+        lines = [
+            f"当前: {base_key} | shape={base_df.shape}",
+            f"目标: {other_key} | shape={other_df.shape}",
+            f"行数差: {len(base_df) - len(other_df)}",
+            f"列数差: {len(base_df.columns) - len(other_df.columns)}",
+            f"仅当前包含列({len(only_base)}): {', '.join(only_base[:20])}",
+            f"仅目标包含列({len(only_other)}): {', '.join(only_other[:20])}",
+            f"共同列({len(common)})",
+            f"dtype变化列({len(dtype_changed)})",
+        ]
+        if dtype_changed:
+            lines.append("前20项 dtype 变化:")
+            for col, bdt, odt in dtype_changed[:20]:
+                lines.append(f"- {col}: {bdt} -> {odt}")
+        self.stage1_compare_text.setPlainText('\n'.join(lines))
+
+    def _render_stage1_dataframe(self, df: pd.DataFrame, page: int = 0):
+        if not isinstance(df, pd.DataFrame):
+            return
+
+        n_rows = int(self.stage1_preview_rows.value()) if hasattr(
+            self, 'stage1_preview_rows') else 50
+        mode = self.stage1_preview_mode.currentText() if hasattr(
+            self, 'stage1_preview_mode') else 'head'
+
+        # Calculate pagination
+        total_rows = len(df)
+        self._stage1_pagination_total_pages = max(1, (total_rows + n_rows - 1) // n_rows)
+        page = max(0, min(page, self._stage1_pagination_total_pages - 1))
+        self._stage1_pagination_current_page = page
+
+        preview_df = self._build_stage1_preview_chunk(df, mode, page, n_rows)
+
+        table = self.stage1_preview_table
+        table.setUpdatesEnabled(False)
+        table.clear()
+        table.setRowCount(len(preview_df))
+        table.setColumnCount(len(preview_df.columns))
+        table.setHorizontalHeaderLabels([str(c) for c in preview_df.columns])
+        table.setSortingEnabled(False)
+        for i, values in enumerate(preview_df.itertuples(index=False, name=None)):
+            for j, val in enumerate(values):
+                text = '' if pd.isna(val) else str(val)
+                table.setItem(i, j, QTableWidgetItem(text))
+        table.resizeColumnsToContents()
+        table.setUpdatesEnabled(True)
+
+        profile = self._get_stage1_profile_text(df)
+        self.stage1_columns_text.setPlainText(profile['columns_text'])
+        self.stage1_describe_text.setPlainText(profile['describe_text'])
+
+        # Update pagination controls
+        self._update_pagination_controls()
+
+    def _build_stage1_preview_chunk(self, df: pd.DataFrame, mode: str, page: int,
+                                    n_rows: int) -> pd.DataFrame:
+        total_rows = len(df)
+        if total_rows <= 0:
+            return df.iloc[0:0]
+
+        start_idx = page * n_rows
+        end_idx = start_idx + n_rows
+        if mode != 'sample':
+            return df.iloc[start_idx:end_idx]
+
+        # For sample mode, build a deterministic page-local sample without sampling
+        # the full DataFrame on every render.
+        stride = max(1, self._stage1_pagination_total_pages)
+        positions = list(range(page, total_rows, stride))[:n_rows]
+        if not positions:
+            return df.iloc[0:0]
+        return df.iloc[positions]
+
+    def _get_stage1_profile_text(self, df: pd.DataFrame):
+        key = getattr(self, '_current_stage1_key', None) or '<unknown>'
+        cache_key = (key, id(df), df.shape)
+
+        if (self._stage1_profile_active_request_id is not None and
+                self._stage1_profile_active_cache_key != cache_key):
+            self._cancel_stage1_profile_worker()
+
+        cached = self._stage1_profile_cache.get(cache_key)
+        if cached is not None:
+            self._set_stage1_profile_progress_visible(False)
+            return cached
+
+        if self._should_async_stage1_profile(df):
+            self._start_stage1_profile_worker(key, df, cache_key)
+            return {
+                'columns_text': '正在后台生成列统计，请稍候...',
+                'describe_text': '正在后台生成统计摘要，请稍候...',
+            }
+
+        profile_rows = len(df)
+        profile_cols = len(df.columns)
+        max_profile_rows = 2000
+        use_sample_profile = profile_rows > 20000 or profile_cols > 200
+        profile_df = df.head(min(max_profile_rows, profile_rows)) if use_sample_profile else df
+
+        lines = []
+        if use_sample_profile:
+            lines.append(
+                f"大数据集优化: 列统计与 describe 基于前 {len(profile_df)} 行样本生成，完整表大小 {df.shape}。")
+
+        col_df = pd.DataFrame({
+            'column': df.columns.astype(str),
+            'dtype': [str(x) for x in df.dtypes],
+            'nulls': [int(profile_df[c].isna().sum()) for c in df.columns],
+            'unique': [int(profile_df[c].nunique(dropna=True)) for c in df.columns],
+        })
+        columns_text = col_df.to_string(index=False, max_rows=100)
+        if lines:
+            columns_text = '\n'.join(lines + [columns_text])
+
+        try:
+            desc = profile_df.describe(include='all', datetime_is_numeric=True)
+            describe_text = desc.to_string(max_rows=120)
+            if use_sample_profile:
+                describe_text = (
+                    f"大数据集优化: describe 基于前 {len(profile_df)} 行样本。\n\n"
+                    f"{describe_text}")
+        except Exception:
+            describe_text = "describe() 不可用或数据列为空。"
+
+        result = {
+            'columns_text': columns_text,
+            'describe_text': describe_text,
+        }
+        self._stage1_profile_cache[cache_key] = result
+        return result
+
+    def _should_async_stage1_profile(self, df: pd.DataFrame) -> bool:
+        return len(df) > 50000 or len(df.columns) > 300
+
+    def _set_stage1_profile_progress_visible(self, visible: bool, text: str = ''):
+        if not hasattr(self, 'stage1_profile_progress'):
+            return
+        self.stage1_profile_progress.setVisible(bool(visible))
+        if text:
+            self.stage1_profile_progress.setFormat(text)
+        elif visible:
+            self.stage1_profile_progress.setFormat('正在生成大数据集摘要...')
+
+    def _cancel_stage1_profile_worker(self):
+        thread = getattr(self, '_stage1_profile_thread', None)
+        if thread is not None:
+            try:
+                if thread.isRunning():
+                    thread.requestInterruption()
+            except Exception:
+                pass
+        self._stage1_profile_active_request_id = None
+        self._stage1_profile_active_cache_key = None
+        self._set_stage1_profile_progress_visible(False)
+
+    def _start_stage1_profile_worker(self, key: str, df: pd.DataFrame, cache_key):
+        cached = self._stage1_profile_cache.get(cache_key)
+        if cached is not None:
+            self._set_stage1_profile_progress_visible(False)
+            return
+
+        if (self._stage1_profile_active_request_id is not None and
+                self._stage1_profile_active_cache_key == cache_key):
+            self._set_stage1_profile_progress_visible(True, '正在生成大数据集摘要...')
+            return
+
+        self._cancel_stage1_profile_worker()
+        self._stage1_profile_request_id += 1
+        request_id = self._stage1_profile_request_id
+        self._stage1_profile_active_request_id = request_id
+        self._stage1_profile_active_cache_key = cache_key
+        self._set_stage1_profile_progress_visible(True, '正在生成大数据集摘要...')
+
+        self._stage1_profile_worker = Stage1ProfileWorker(request_id, key, df)
+        self._stage1_profile_thread = QThread()
+        self._stage1_profile_worker.moveToThread(self._stage1_profile_thread)
+
+        self._stage1_profile_thread.started.connect(self._stage1_profile_worker.run)
+        self._stage1_profile_worker.progress.connect(self._on_stage1_profile_progress)
+        self._stage1_profile_worker.log.connect(self._log)
+        self._stage1_profile_worker.finished.connect(self._on_stage1_profile_finished)
+        self._stage1_profile_worker.finished.connect(self._stage1_profile_thread.quit)
+        self._stage1_profile_worker.finished.connect(self._stage1_profile_worker.deleteLater)
+        self._stage1_profile_thread.finished.connect(self._stage1_profile_thread.deleteLater)
+
+        self._stage1_profile_thread.start()
+
+    def _on_stage1_profile_progress(self, current, total, status):
+        if self._stage1_profile_active_request_id is None:
+            return
+        self.stage1_profile_progress.setVisible(True)
+        self.stage1_profile_progress.setMaximum(max(int(total), 1))
+        self.stage1_profile_progress.setValue(min(int(current), int(total)))
+        self.stage1_profile_progress.setFormat(str(status))
+
+    def _on_stage1_profile_finished(self, request_id, cache_key, result, error):
+        try:
+            if request_id != self._stage1_profile_active_request_id:
+                return
+            self._stage1_profile_active_request_id = None
+            self._stage1_profile_active_cache_key = None
+            self._set_stage1_profile_progress_visible(False)
+
+            if error and error != 'cancelled':
+                self.stage1_columns_text.setPlainText(f'摘要生成失败: {error}')
+                self.stage1_describe_text.setPlainText(f'摘要生成失败: {error}')
+                return
+            if error == 'cancelled' or not result:
+                return
+
+            self._stage1_profile_cache[cache_key] = result
+            current_key = getattr(self, '_current_stage1_key', None)
+            current_df = self.context.get_main(current_key) if current_key else None
+            if isinstance(current_df, pd.DataFrame):
+                current_cache_key = (current_key, id(current_df), current_df.shape)
+                if current_cache_key == cache_key:
+                    self.stage1_columns_text.setPlainText(result['columns_text'])
+                    self.stage1_describe_text.setPlainText(result['describe_text'])
+        finally:
+            self._stage1_profile_worker = None
+            self._stage1_profile_thread = None
+
+    def _update_pagination_controls(self):
+        """Update pagination button states and label."""
+        if not hasattr(self, 'stage1_pagination_prev_btn'):
+            return
+        
+        current = self._stage1_pagination_current_page + 1
+        total = self._stage1_pagination_total_pages
+        
+        self.stage1_pagination_label.setText(f"第 {current} 页 / 共 {total} 页")
+        self.stage1_pagination_prev_btn.setEnabled(self._stage1_pagination_current_page > 0)
+        self.stage1_pagination_next_btn.setEnabled(
+            self._stage1_pagination_current_page < self._stage1_pagination_total_pages - 1)
+
+    def _pagination_prev_page(self):
+        """Navigate to previous page."""
+        if self._stage1_pagination_current_page > 0:
+            df = self.context.get_main(self._current_stage1_key)
+            if isinstance(df, pd.DataFrame):
+                self._render_stage1_dataframe(df, page=self._stage1_pagination_current_page - 1)
+
+    def _pagination_next_page(self):
+        """Navigate to next page."""
+        if self._stage1_pagination_current_page < self._stage1_pagination_total_pages - 1:
+            df = self.context.get_main(self._current_stage1_key)
+            if isinstance(df, pd.DataFrame):
+                self._render_stage1_dataframe(df, page=self._stage1_pagination_current_page + 1)
+
+    def _import_stage1_dataframe(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "导入数据文件",
+            "",
+            "Data Files (*.csv *.xlsx *.xls *.parquet);;All Files (*.*)")
+        if not path:
+            return
+
+        p = Path(path)
+        try:
+            suffix = p.suffix.lower()
+            if suffix == '.csv':
+                df = pd.read_csv(path)
+            elif suffix in ('.xlsx', '.xls'):
+                df = pd.read_excel(path)
+            elif suffix == '.parquet':
+                df = pd.read_parquet(path)
+            else:
+                raise ValueError(f'不支持的文件类型: {suffix}')
+
+            base = p.stem
+            key = base
+            idx = 1
+            while key in self.context.main:
+                idx += 1
+                key = f'{base}_{idx}'
+
+            self.context.set_main(key, df)
+            self._stage1_df_meta[key] = {
+                'source': f'import:{p.name}',
+                'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            }
+            self._refresh_stage1_data_view(select_key=key)
+            self._refresh_data_stage_view()
+            self._log(f"✅ 已导入 DataFrame: {key} ({len(df)} x {len(df.columns)})")
+        except Exception as e:
+            QMessageBox.critical(self, "导入失败", str(e))
+
+    def _get_pipeline_data_stages(self):
+        cfg = getattr(self, 'config', None)
+        if not isinstance(cfg, dict):
+            return []
+        stages = []
+        for st in (cfg.get('pipeline') or []):
+            if isinstance(st, dict) and st.get('type') == 'data':
+                stages.append(st)
+        return stages
+
+    def _build_stage2_bridge_project(self):
+        project_name = 'stage2_bridge'
+        try:
+            if getattr(self, 'config_path', None):
+                project_name = Path(self.config_path).stem + '_stage2'
+        except Exception:
+            pass
+
+        inputs = []
+        for key, value in sorted((getattr(self.context, 'main', {}) or {}).items()):
+            if isinstance(value, pd.DataFrame):
+                inputs.append({
+                    'name': str(key),
+                    'source_type': 'memory',
+                    'source_params': {'df': value},
+                })
+
+        stages = []
+        for stage in self._get_pipeline_data_stages():
+            current = dict(stage)
+            current.setdefault('type', 'data')
+            stages.append(current)
+
+        return {
+            'name': project_name,
+            'inputs': inputs,
+            'stages': stages,
+        }
+
+    def _refresh_stage2_bridge_panel(self):
+        if not hasattr(self, 'stage2_bridge_text'):
+            return
+
+        project = self._build_stage2_bridge_project()
+        df_count = len(project.get('inputs', []))
+        stage_count = len(project.get('stages', []))
+        self.stage2_bridge_summary.setText(
+            f"当前可桥接到 Stage 2 的 DataFrame: {df_count} 个 | data stages: {stage_count} 个")
+
+        preview = {
+            'name': project.get('name', 'stage2_bridge'),
+            'inputs': [
+                {
+                    'name': item.get('name', ''),
+                    'source_type': item.get('source_type', ''),
+                    'rows': int(len(item['source_params']['df'])) if isinstance(item.get('source_params', {}).get('df'), pd.DataFrame) else None,
+                    'cols': list(item['source_params']['df'].columns) if isinstance(item.get('source_params', {}).get('df'), pd.DataFrame) else None,
+                }
+                for item in project.get('inputs', [])
+            ],
+            'stages': [
+                {
+                    'name': st.get('name', 'data'),
+                    'source': st.get('source', 'df'),
+                    'steps': len(st.get('steps', []) or []),
+                    'series': len(st.get('series', []) or []),
+                }
+                for st in project.get('stages', [])
+            ],
+        }
+        self.stage2_bridge_text.setPlainText(json.dumps(preview, ensure_ascii=False, indent=2))
+
+    def _export_stage1_to_stage2_artifact(self):
+        out_dir = QFileDialog.getExistingDirectory(self, '选择导出目录', str(Path.cwd()))
+        if not out_dir:
+            return
+        try:
+            artifact_path = export_artifact(self.context, out_dir)
+            self._log(f"✅ Stage 1 artifact 已导出: {artifact_path}")
+            QMessageBox.information(self, '导出完成', f'Stage 1 artifact 已导出到:\n{artifact_path}')
+        except Exception as e:
+            QMessageBox.critical(self, '导出失败', str(e))
+
+    def _open_stage2_workspace(self):
+        try:
+            from stage2_platform.ui import Stage2WorkspaceWindow
+
+            project = self._build_stage2_bridge_project()
+            self._stage2_workspace_window = Stage2WorkspaceWindow(initial_project=project)
+            self._stage2_workspace_window.show()
+            self._stage2_workspace_window.raise_()
+            self._stage2_workspace_window.activateWindow()
+        except Exception as e:
+            QMessageBox.critical(self, '打开 Stage 2 失败', str(e))
+
+    def _refresh_data_stage_view(self):
+        self._refresh_stage2_bridge_panel()
 
     def _format_config(self):
         """格式化当前编辑区的 YAML 内容"""
@@ -566,6 +1268,11 @@ class BatchProcessorGUI(QWidget):
     def _run_in_thread(self):
         # 清空上下文，避免旧数据污染
         self.context.clear()  # 需要在 ProcessingContext 中实现 clear()
+        self._current_stage1_key = None
+        if hasattr(self, 'stage1_compare_text'):
+            self.stage1_compare_text.clear()
+        self._refresh_stage1_data_view()
+        self._refresh_data_stage_view()
         if not hasattr(self, 'config'):
             self._load_config()
         if not hasattr(self, 'config'):
@@ -636,6 +1343,7 @@ class BatchProcessorGUI(QWidget):
             self.thread.requestInterruption()  # 请求中断
             self._log("🛑 正在请求取消批处理，请稍候...")
             self.btn_cancel.setEnabled(False)  # 防止重复点击
+            return
 
     def _on_progress(self, current, total, status):
         self.progress_bar.setMaximum(total)
@@ -778,6 +1486,16 @@ class BatchProcessorGUI(QWidget):
         self._log("✅ 批处理完成！")
         self.progress_bar.setFormat("完成")
         self._show_results(context.results)
+        # Refresh Stage 1 dataframe registry from context.main after run.
+        for key, value in (getattr(context, 'main', {}) or {}).items():
+            if isinstance(value, pd.DataFrame):
+                meta = self._stage1_df_meta.setdefault(str(key), {})
+                if str(meta.get('source', '')).startswith('import:'):
+                    continue
+                meta['source'] = 'stage1/run'
+                meta['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        self._refresh_stage1_data_view(select_key=self._current_stage1_key)
+        self._refresh_data_stage_view()
         self.btn_run.setEnabled(True)
         self.btn_cancel.setEnabled(False)
         # Finalize preview table statuses if present
@@ -840,6 +1558,17 @@ class BatchProcessorGUI(QWidget):
             self, 'root_line') else self.root_path
         if not root:
             QMessageBox.warning(self, "警告", "请先在目标目录中选择或填写要预览的根路径。")
+            return
+
+        # Ensure config is loaded before preview; otherwise pipeline UI tabs
+        # may be hidden because mode detection has no config to evaluate.
+        if (not hasattr(self, 'config')) or (not self.config):
+            try:
+                self._load_config()
+            except Exception:
+                pass
+        if (not hasattr(self, 'config')) or (not self.config):
+            QMessageBox.warning(self, "警告", "请先加载配置文件，再进行预览。")
             return
 
         try:
@@ -949,7 +1678,7 @@ class BatchProcessorGUI(QWidget):
         # --- Execution order tab ---
         exec_tab = QWidget()
         exec_layout = QVBoxLayout()
-        is_pipeline = getattr(self, '_is_pipeline_mode', False)
+        is_pipeline = is_pipeline_config(getattr(self, 'config', {}))
         # Folding controls: allow collapsing rows deeper than selected level
         fold_layout = QHBoxLayout()
         lbl_fold = QLabel("只显示层级 ≤")
@@ -1463,16 +2192,27 @@ class BatchProcessorGUI(QWidget):
                 self.results_table.setItem(i, j, item)
 
     def _show_dataframe(self, df: pd.DataFrame):
-        self.table = QTableWidget()
-        self.table.setRowCount(len(df))
-        self.table.setColumnCount(len(df.columns))
-        self.table.setHorizontalHeaderLabels(df.columns)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("DataFrame 预览")
+        dialog.resize(900, 560)
+        layout = QVBoxLayout(dialog)
 
-        for i, row in df.iterrows():
+        table = QTableWidget()
+        table.setRowCount(len(df))
+        table.setColumnCount(len(df.columns))
+        table.setHorizontalHeaderLabels([str(c) for c in df.columns])
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        for i, (_, row) in enumerate(df.iterrows()):
             for j, val in enumerate(row):
-                self.table.setItem(i, j, QTableWidgetItem(str(val)))
+                table.setItem(i, j, QTableWidgetItem(str(val)))
+        table.resizeColumnsToContents()
+        layout.addWidget(table)
 
-        self.layout.addWidget(self.table)
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(dialog.close)
+        layout.addWidget(btn_close)
+        dialog.exec_()
 
     def _get_enabled_processors_from_table(self):
         """

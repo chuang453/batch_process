@@ -160,6 +160,13 @@ closure for performance.
   - `processors/`、`plugins/`：内置与外部处理器
   - `cli/app.py`、`main_window.py`：命令行与图形界面入口
 
+## Stage 2 文档
+
+- Stage 2 平台完整说明（原理、架构、配置、CLI/API/UI、桥接流程）：
+  - [docs/stage2_platform.md](docs/stage2_platform.md)
+- 总体架构说明：
+  - [docs/architecture.md](docs/architecture.md)
+
 快速开始
 - 依赖安装（建议使用虚拟环境）：
   - 基础：`qtpy`, `pyyaml`, `pandas`

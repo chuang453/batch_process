@@ -83,3 +83,26 @@ AI agent notes
 If you'd like, I can expand with: (a) a minimal example processor file, (b) a sample config demonstrating recorder injection, or (c) a checklist for adding GUI signal tests.
 
 ```
+
+Verification workflow (harness)
+- After any code change, run selective verification first:
+  - `pytest --testmon -q`
+- If test selection needs to be explicit from changed paths, use:
+  - `git diff --name-only HEAD | python harness/test_selector.py`
+  - Then run the emitted tests with pytest.
+- When `--testmon` data is missing (first run) or broad refactors occur, run full regression:
+  - `pytest -q`
+
+Impact map (changed module -> likely tests)
+- `core/engine.py` -> `test/test_validate.py`, `test/test_file_ops.py`, `test/test_main_routing.py`
+- `core/data_stage.py` -> `test/test_data_stage.py`, `test/test_transform.py`
+- `core/pipeline.py` -> `test/test_pipeline.py`, `test/test_pipeline_helpers.py`, `test/test_pipeline_simulate_compat.py`
+- `decorators/processor.py` -> `test/test_builtin_recorders.py`, `test/test_processor_metadata.py`, `test/test_validate.py`
+- `config/loader.py` -> `test/test_config_loader_pipeline.py`, `test/test_validate.py`
+- `processors/` -> `test/test_file_ops.py`, `test/test_builtin_recorders.py`
+- `widgets/batch_thread.py` -> `test/test_pipeline_worker_signals.py`
+
+Required response format after edits
+- Summarize changed files and behavior impact.
+- List exactly which tests were executed.
+- Report pass/fail and any skipped validation.

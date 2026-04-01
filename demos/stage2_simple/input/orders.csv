@@ -1,0 +1,8 @@
+order_id,customer,qty,price
+1001,Alice,2,19.9
+1002,Bob,1,49.0
+1003,Alice,3,11.5
+1004,Chen,5,8.2
+1005,Diana,1,99.0
+1006,Bob,2,15.0
+1007,Eric,,12.0

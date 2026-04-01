@@ -7,7 +7,11 @@ batch_process is a recursive batch-processing framework with GUI and CLI entry p
 The architecture now has two execution layers:
 
 - BatchProcessor: file traversal and per-path processor execution
-- Pipeline + DataStage: multi-stage orchestration for walk and DataFrame processing
+- Pipeline + Stage 2 Platform: walk orchestration plus standalone DataFrame processing platform
+
+For Stage 2 platform details (principles, module split, config model, CLI/API/UI usage, and Stage 1 bridge), see:
+
+- [stage2_platform.md](stage2_platform.md)
 
 ## Core Modules
 
@@ -15,6 +19,7 @@ The architecture now has two execution layers:
 - core/engine.py: BatchProcessor traversal, matching, execution, progress, status log
 - core/pipeline.py: stage orchestrator for walk/data stages
 - core/data_stage.py: DataFrame step engine (builtin ops, transforms, group_by)
+- stage2_platform/: standalone Stage 2 package (contracts/config/ingestion/execution/registry/delivery/api/cli/ui)
 - config/loader.py: config loading and plugin auto-discovery
 - cli/app.py: CLI routing for classic mode and pipeline mode
 

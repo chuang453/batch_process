@@ -187,9 +187,13 @@ class Pipeline:
                             'phase': item.get('step_type', 'data'),
                             'path': f'.pipeline/{stage_name}',
                             'is_dir': True,
-                            'proc_name': item.get('step_type', 'data'),
+                            'proc_name': item.get('op_name') or item.get('step_type', 'data'),
                             'config': item.get('detail', {}),
                             'stage': stage_name,
+                            'data_step_id': item.get('step', ''),
+                            'data_step_type': item.get('step_type', ''),
+                            'data_op_name': item.get('op_name', ''),
+                            'data_level': item.get('level', 0),
                         })
                 else:
                     proc_names = []

@@ -17,3 +17,13 @@ Files produced
 - `demos/demo_extract_output/plot_extract_meta_demo_target.json` — summary JSON
 
 See `demos/demo_extract_closure_demo.py` for runnable code.
+
+## Stage 2 Demos
+
+- `demos/stage2_simple/`
+  - 最小可运行示例：单输入、单 stage、单 series。
+  - 适合快速验证 Stage 2 CLI/API 基本流程。
+
+- `demos/stage2_complex/`
+  - 复杂编排示例：多输入、多 stage、多 series、group_by collect。
+  - 适合验证真实项目中的组合流程与输出导出。

@@ -1,0 +1,81 @@
+name: stage2_complex_demo
+
+inputs:
+  - name: orders_raw
+    source_type: file
+    source_params:
+      path: demos/stage2_complex/input/orders.csv
+      encoding: utf-8
+
+  - name: returns_raw
+    source_type: file
+    source_params:
+      path: demos/stage2_complex/input/returns.csv
+      encoding: utf-8
+
+stages:
+  - name: clean_stage
+    type: data
+    source: orders_raw
+    series:
+      - name: clean_orders
+        input_key: orders_raw
+        output_key: orders_clean
+        enabled: true
+        continue_on_error: true
+        output_policy: overwrite
+        steps:
+          - dropna:
+              subset: [order_id, customer, region, qty, price, order_date]
+          - astype:
+              qty: int64
+              price: float64
+          - eval: amount = qty * price
+          - sort:
+              by: [region, customer, order_date]
+              ascending: true
+
+      - name: clean_returns
+        input_key: returns_raw
+        output_key: returns_clean
+        enabled: true
+        continue_on_error: true
+        output_policy: overwrite
+        steps:
+          - dropna:
+              subset: [order_id, reason]
+          - select: [order_id, reason]
+          - sort:
+              by: order_id
+              ascending: true
+
+  - name: analytics_stage
+    type: data
+    source: orders_clean
+    series:
+      - name: top_by_customer
+        input_key: orders_clean
+        output_key: customer_top_orders
+        enabled: true
+        continue_on_error: true
+        output_policy: overwrite
+        steps:
+          - group_by: [customer]
+            collect: true
+            steps:
+              - sort:
+                  by: amount
+                  ascending: false
+              - head: 2
+
+      - name: latest_orders
+        input_key: orders_clean
+        output_key: latest_orders
+        enabled: true
+        continue_on_error: true
+        output_policy: overwrite
+        steps:
+          - sort:
+              by: order_date
+              ascending: false
+          - head: 6

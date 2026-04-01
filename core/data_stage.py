@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 import pandas as pd
 
 from decorators.processor import ProcessingContext, TRANSFORMS
+from stage2_platform.contracts.step_descriptor import StepEvent, StepResult
+from stage2_platform.execution.builtin_ops import BUILTIN_OPS
+from stage2_platform.execution.step_parser import parse_steps
 from utils.adapters.df_helpers import prepend_dict_columns, split_dataframe_by_groups
 
 
@@ -43,116 +46,142 @@ class DataStage:
             'ts': datetime.now().isoformat(sep=' ', timespec='seconds')
         })
 
-    def run_steps(self, df: Any, steps: List[dict]) -> Any:
-        out = df
-        total = len(steps or [])
-        for idx, step in enumerate(steps or [], start=1):
-            step_name = 'group_by' if 'group_by' in step else 'transform' if 'run' in step else 'builtin_op'
+    def _emit_event(self, observer: Callable[[StepEvent], None] | None, event: StepEvent):
+        if observer is not None:
             try:
-                if self.worker is not None and hasattr(self.worker, 'step_started'):
-                    try:
-                        self.worker.step_started.emit(idx)
-                    except Exception:
-                        pass
+                observer(event)
+            except Exception:
+                pass
 
-                if 'group_by' in step:
-                    out = self._run_group_by(out, step)
-                elif 'run' in step:
-                    cfg = step.get('config', {}) or {}
-                    out = self._run_transform_chain(out, step.get('run', []), cfg)
+        # Compatibility bridge: keep existing worker signal behavior.
+        if self.worker is not None and hasattr(self.worker, 'step_started') and event.kind == 'started':
+            try:
+                self.worker.step_started.emit(int(str(event.step_id).split('.')[-1]))
+            except Exception:
+                pass
+        if self.worker is not None and hasattr(self.worker, 'step_finished') and event.kind in ('finished', 'failed'):
+            try:
+                success = event.kind == 'finished'
+                self.worker.step_finished.emit(int(str(event.step_id).split('.')[-1]), success, event.error)
+            except Exception:
+                pass
+
+    def run_steps(self,
+                  df: Any,
+                  steps: List[dict],
+                  on_error: str = 'continue',
+                  observer: Callable[[StepEvent], None] | None = None,
+                  return_result: bool = False) -> Any:
+        out = df
+        descriptors = parse_steps(steps or [])
+        total = len(descriptors)
+        failed_count = 0
+
+        for idx, desc in enumerate(descriptors, start=1):
+            step_name = desc.op_name or desc.op_type
+            self._emit_event(observer, StepEvent(desc.step_id, step_name, 'started', ''))
+            try:
+                if desc.op_type == 'group_by':
+                    out = self._run_group_by(out,
+                                             desc.detail,
+                                             on_error=on_error,
+                                             observer=observer,
+                                             parent_step=desc.step_id,
+                                             exec_frame={})
+                elif desc.op_type == 'transform':
+                    cfg = desc.detail.get('config', {}) if isinstance(desc.detail, dict) else {}
+                    out = self._run_transform_chain(out,
+                                                    list(desc.params or []),
+                                                    cfg,
+                                                    on_error=on_error)
                 else:
-                    out = self._run_builtin_op(out, step)
+                    out = self._run_builtin_op(out, desc)
 
                 self._call_progress(idx, total, f"data step {idx}/{total}: {step_name}")
-                if self.worker is not None and hasattr(self.worker, 'step_finished'):
-                    try:
-                        self.worker.step_finished.emit(idx, True, '')
-                    except Exception:
-                        pass
+                self._emit_event(observer, StepEvent(desc.step_id, step_name, 'finished', ''))
             except Exception as e:
+                failed_count += 1
                 self.context.add_result({
                     'processor': step_name,
                     'status': 'failed',
                     'error': str(e),
                 })
-                if self.worker is not None and hasattr(self.worker, 'step_finished'):
-                    try:
-                        self.worker.step_finished.emit(idx, False, str(e))
-                    except Exception:
-                        pass
-        return out
+                self._emit_event(observer, StepEvent(desc.step_id, step_name, 'failed', str(e)))
 
-    def simulate_steps(self, df: Any, steps: List[dict]) -> List[dict]:
+                policy = str(on_error or 'continue').lower()
+                if policy == 'abort':
+                    raise
+                if policy == 'skip_remaining':
+                    break
+
+        result = StepResult(
+            df=out,
+            success=failed_count == 0,
+            error='' if failed_count == 0 else f'{failed_count} step(s) failed',
+            step_id=descriptors[-1].step_id if descriptors else '',
+            op_name=descriptors[-1].op_name if descriptors else '',
+        )
+        if return_result:
+            return result
+        return result.df
+
+    def simulate_steps(self, df: Any, steps: List[dict],
+                        _prefix: str = '', _level: int = 0) -> List[dict]:
+        """Produce a flat list describing each step for preview purposes.
+
+        For ``group_by`` steps the sub-steps are recursively expanded with
+        dotted numbering (e.g. ``3.1``, ``3.2``) so the UI can render them
+        with indentation.
+        """
         records: List[dict] = []
-        for idx, step in enumerate(steps or [], start=1):
-            step_type = 'builtin_op'
-            if 'group_by' in step:
-                step_type = 'group_by'
-            elif 'run' in step:
-                step_type = 'transform'
-            records.append({'step': idx, 'step_type': step_type, 'detail': step})
+        parsed = parse_steps(steps or [], prefix=_prefix, level=_level, flatten=True)
+        for desc in parsed:
+            step_type = 'builtin_op' if desc.op_type == 'builtin' else desc.op_type
+            records.append({
+                'step': desc.step_id,
+                'step_type': step_type,
+                'op_name': desc.op_name,
+                'level': desc.level,
+                'detail': desc.detail,
+            })
         return records
 
-    def _run_builtin_op(self, df: Any, step: Dict[str, Any]) -> Any:
+    def _run_builtin_op(self, df: Any, desc) -> Any:
         if not isinstance(df, pd.DataFrame):
             self.context.add_result({
-                'processor': 'builtin_op',
+                'processor': desc.op_name or 'builtin_op',
                 'status': 'skipped',
                 'reason': 'input is not DataFrame',
-                'detail': step,
+                'detail': desc.detail,
+            })
+            return df
+
+        op = BUILTIN_OPS.get(desc.op_name)
+        if op is None:
+            self.context.add_result({
+                'processor': desc.op_name or 'builtin_op',
+                'status': 'skipped',
+                'reason': 'unknown op',
+                'detail': desc.detail,
             })
             return df
 
         try:
-            if 'rename' in step:
-                return df.rename(columns=step['rename'])
-            if 'dropna' in step:
-                params = step['dropna']
-                if isinstance(params, dict):
-                    return df.dropna(**params)
-                return df.dropna()
-            if 'filter' in step:
-                return df.query(step['filter'])
-            if 'select' in step:
-                return df[list(step['select'])]
-            if 'sort' in step:
-                params = step['sort']
-                if isinstance(params, dict):
-                    return df.sort_values(**params)
-                return df.sort_values(by=params)
-            if 'fillna' in step:
-                return df.fillna(step['fillna'])
-            if 'eval' in step:
-                return df.eval(step['eval'])
-            if 'astype' in step:
-                return df.astype(step['astype'])
-            if 'drop' in step:
-                cols = step['drop']
-                if isinstance(cols, dict):
-                    return df.drop(**cols)
-                return df.drop(columns=list(cols))
-            if 'head' in step:
-                return df.head(int(step['head']))
-            if 'tail' in step:
-                return df.tail(int(step['tail']))
-
-            self.context.add_result({
-                'processor': 'builtin_op',
-                'status': 'skipped',
-                'reason': 'unknown op',
-                'detail': step,
-            })
-            return df
+            return op(df, desc.params)
         except Exception as e:
             self.context.add_result({
-                'processor': 'builtin_op',
+                'processor': desc.op_name or 'builtin_op',
                 'status': 'failed',
                 'error': str(e),
-                'detail': step,
+                'detail': desc.detail,
             })
-            return df
+            raise
 
-    def _run_transform_chain(self, df: Any, func_names: List[str], config: Dict[str, Any]) -> Any:
+    def _run_transform_chain(self,
+                             df: Any,
+                             func_names: List[str],
+                             config: Dict[str, Any],
+                             on_error: str = 'continue') -> Any:
         out = df
         for fname in func_names or []:
             func = self._transforms.get(fname)
@@ -188,6 +217,8 @@ class DataStage:
                     'status': 'failed',
                     'error': str(e),
                 })
+                if str(on_error or 'continue').lower() == 'abort':
+                    raise
         return out
 
     def _normalize_group_cols(self, cols) -> List[str]:
@@ -195,7 +226,13 @@ class DataStage:
             return [cols]
         return list(cols or [])
 
-    def _run_group_by(self, df: Any, step: Dict[str, Any]) -> Any:
+    def _run_group_by(self,
+                      df: Any,
+                      step: Dict[str, Any],
+                      on_error: str = 'continue',
+                      observer: Callable[[StepEvent], None] | None = None,
+                      parent_step: str = '',
+                      exec_frame: Dict[str, Any] | None = None) -> Any:
         if not isinstance(df, pd.DataFrame):
             self.context.add_result({
                 'processor': 'group_by',
@@ -219,33 +256,33 @@ class DataStage:
             })
             return df
 
-        loop_cols_stack = self.context.setdefault_metadata(['runtime_info', 'loop_cols'], [])
-        loop_vars_stack = self.context.setdefault_metadata(['runtime_info', 'loop_vars'], [])
-        loop_cols_stack.append(group_cols)
-        loop_vars_stack.append(None)
+        frame = dict(exec_frame or {})
+        frame['group_cols'] = group_cols
+        frame['group_key'] = None
 
         collected: List[pd.DataFrame] = []
-        try:
-            total = len(groups)
-            for idx, (group_key, group_df) in enumerate(groups, start=1):
-                if self.worker and hasattr(self.worker, 'thread'):
-                    thr = self.worker.thread()
-                    if thr and thr.isInterruptionRequested():
-                        break
+        total = len(groups)
+        for idx, (group_key, group_df) in enumerate(groups, start=1):
+            if self.worker and hasattr(self.worker, 'thread'):
+                thr = self.worker.thread()
+                if thr and thr.isInterruptionRequested():
+                    break
 
-                loop_vars_stack[-1] = group_key
-                self._record_pipe('_group', {
-                    'key': group_key,
-                    'rows': int(len(group_df)) if hasattr(group_df, '__len__') else None,
-                    'cols': list(group_df.columns) if isinstance(group_df, pd.DataFrame) else None,
-                }, phase='group')
+            frame['group_key'] = group_key
+            self._record_pipe('_group', {
+                'key': group_key,
+                'rows': int(len(group_df)) if hasattr(group_df, '__len__') else None,
+                'cols': list(group_df.columns) if isinstance(group_df, pd.DataFrame) else None,
+            }, phase='group')
+            self._call_progress(idx, max(total, 1), f'group {idx}/{total}')
 
-                result_df = self.run_steps(group_df, sub_steps)
-                if collect and isinstance(result_df, pd.DataFrame):
-                    collected.append(prepend_dict_columns(result_df, group_key))
-        finally:
-            loop_cols_stack.pop()
-            loop_vars_stack.pop()
+            result = self.run_steps(group_df,
+                                    sub_steps,
+                                    on_error=on_error,
+                                    observer=observer,
+                                    return_result=True)
+            if collect and isinstance(result.df, pd.DataFrame):
+                collected.append(prepend_dict_columns(result.df, group_key))
 
         if collect and collected:
             return pd.concat(collected, ignore_index=True)

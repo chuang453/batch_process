@@ -1,0 +1,32 @@
+name: stage2_simple_demo
+
+inputs:
+  - name: orders_raw
+    source_type: file
+    source_params:
+      path: demos/stage2_simple/input/orders.csv
+      encoding: utf-8
+
+stages:
+  - name: clean_and_enrich
+    type: data
+    source: orders_raw
+    series:
+      - name: prepare_orders
+        input_key: orders_raw
+        output_key: orders_prepared
+        enabled: true
+        continue_on_error: true
+        output_policy: overwrite
+        steps:
+          - dropna:
+              subset: [order_id, qty, price]
+          - astype:
+              qty: int64
+              price: float64
+          - eval: total = qty * price
+          - select: [order_id, customer, qty, price, total]
+          - sort:
+              by: total
+              ascending: false
+          - head: 5
