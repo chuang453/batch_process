@@ -40,6 +40,37 @@ Stage 2 采用 project -> stage -> series -> step 的分层执行模型：
 
 - 单 series 失败可由 continue_on_error 控制是否继续后续 series。
 
+### 2.1 原理图
+
+```mermaid
+flowchart LR
+  A[Project Spec YAML JSON] --> B[Config Layer<br/>normalize + validate]
+  B --> C[Stage2Service]
+  C --> D[ProjectRunner]
+  D --> E[StageOrchestrator]
+  E --> F[SeriesExecutor]
+  F --> G[DataStage Interpreter]
+
+  G --> H[Step Parser<br/>builtin transform group_by]
+  H --> I[Builtin Registry<br/>BUILTIN_OPS]
+  H --> J[Transform Registry<br/>STAGE2_TRANSFORMS]
+
+  D --> K[Dataset Catalog]
+  F --> K
+  D --> L[Run Manifest]
+
+  M[Ingestion Adapters<br/>file memory sql api stage1_artifact] --> K
+  K --> N[Outputs UI/CLI/API]
+  L --> N
+```
+
+图中可以把 Stage 2 理解为四层：
+
+1. 声明层：project/stage/series/step。
+2. 解释层：runner/orchestrator/executor/datastage。
+3. 能力层：builtin ops 与 transforms 注册表。
+4. 状态层：catalog（数据平面）与 manifest（控制平面）。
+
 ---
 
 ## 3. 架构与模块
@@ -238,3 +269,33 @@ manifest = svc.run_project()
 5. API 门面：[stage2_platform/api/service.py](../stage2_platform/api/service.py)
 6. CLI 入口：[stage2_platform/cli/app.py](../stage2_platform/cli/app.py)
 7. UI 工作台：[stage2_platform/ui/workspace_window.py](../stage2_platform/ui/workspace_window.py)
+
+---
+
+## 10. 使用范围
+
+### 10.1 适用场景
+
+1. 以表格/结构化数据为主的数据清洗、转换、聚合。
+2. 需要可重放、可审计的批处理流程（manifest 可追踪）。
+3. 需要一套配置同时支持 CLI、UI、API 三种入口。
+4. 需要与 Stage 1 串联，但希望 Stage 2 能独立演进。
+
+### 10.2 不适用场景
+
+1. 纯文件副作用流程（复制/重命名/目录操作）且不涉及 DataFrame。
+2. 超低延迟在线请求链路（Stage 2 更偏批处理编排）。
+3. 强事务型写入场景（需专门事务编排，不建议直接依赖当前 run 语义）。
+4. 极重计算单步（建议下沉到专用计算引擎后通过 transform 接入）。
+
+### 10.3 与 Stage 1 的边界
+
+1. Stage 1：负责文件系统遍历、规则匹配、外部副作用。
+2. Stage 2：负责数据集编排、算子执行、输出管理与运行记录。
+3. 跨边界建议用 artifact bridge，避免长期依赖 memory bridge。
+
+### 10.4 选型建议
+
+1. 只做文件处理：优先 Stage 1。
+2. 只做数据加工：优先 Stage 2。
+3. 文件提取 + 数据分析：Stage 1 提取后桥接到 Stage 2。
